@@ -289,9 +289,8 @@ static int matching_flags; /* exclude_fnmatch options */
    static storage and can't be relied upon across two calls.
 
    If CHANGE_DIRS is true, treat any entries of type NELT_CHDIR as
-   the request to change to the given directory.  If filename_terminator
-   is NUL, CHANGE_DIRS is effectively always false.
-
+   the request to change to the given directory.
+   
    Entries of type NELT_FMASK cause updates of the matching_flags
    value. */
 struct name_elt *
@@ -300,9 +299,6 @@ name_next_elt (int change_dirs)
   static struct name_elt entry;
   const char *source;
   char *cursor;
-
-  if (filename_terminator == '\0')
-    change_dirs = 0;
 
   while (name_index != names)
     {
@@ -392,9 +388,7 @@ name_gather (void)
       if (allocated_size == 0)
 	{
 	  allocated_size = offsetof (struct name, name) + NAME_FIELD_SIZE + 1;
-	  buffer = xmalloc (allocated_size);
-	  /* FIXME: This memset is overkill, and ugly...  */
-	  memset (buffer, 0, allocated_size);
+	  buffer = xzalloc (allocated_size);
 	}
       
       while ((ep = name_next_elt (0)) && ep->type == NELT_CHDIR)
@@ -734,7 +728,7 @@ static void
 add_hierarchy_to_namelist (struct name *name, dev_t device)
 {
   char *file_name = name->name;
-  char *buffer = get_directory_contents (file_name, device);
+  const char *buffer = get_directory_contents (file_name, device);
 
   if (! buffer)
     name->dir_contents = "\0\0\0\0";
@@ -746,7 +740,7 @@ add_hierarchy_to_namelist (struct name *name, dev_t device)
 				 : NAME_FIELD_SIZE);
       char *namebuf = xmalloc (allocated_length + 1);
 				/* FIXME: + 2 above?  */
-      char *string;
+      const char *string;
       size_t string_length;
       int change_dir = name->change_dir;
 

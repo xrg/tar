@@ -1,7 +1,7 @@
 # Process this file with autom4te to create testsuite. -*- Autotest -*-
 
 # Test suite for GNU tar.
-# Copyright (C) 2005, 2007, 2008 Free Software Foundation, Inc.
+# Copyright (C) 2008 Free Software Foundation, Inc.
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -18,27 +18,35 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 # 02110-1301, USA.
 
-# Check that tar doesn't complain when reading short records.
-# This can happen when the input blocksize differs from the blocksize
-# used to create the archive.
+# When volume size equals record size, swapping buffers in
+# new_volume triggers a call to flush_archive.  The size left variables
+# must be corrected after that, which was not done in versions <= 1.20.
+# Reported by: Marek Kielar <mkielar@go2.pl>
+# References: <1907cbb6.79e32b49.48887f09.fd55@o2.pl>
 
-AT_SETUP([short records])
-AT_KEYWORDS([shortrec])
+AT_SETUP([Multivolumes with L=record_size])
+AT_KEYWORDS([multivolume multiv multiv06])
 
-AT_TAR_WITH_HOOK([TAR_IGNREC_HOOK],
-[AT_TAR_CHECK([
-mkdir directory
-(cd directory && touch a b c d e f g h i j k l m n o p q r)
-tar -c -b 1 -f - directory | tar -t -f - 
-tar -c -b 1 -f archive directory
-tar -t -f archive 
-tar -t -f - < archive 
-
-rm -r directory
-],
+AT_TAR_CHECK([
+exec <&-
+decho Creating file
+genfile --length 20139 --file file
+decho Creating archive
+tar -c -M -L10 -b20 -farc.1 -farc.2 -farc.3 file
+decho Testing archive
+tar -t -M -farc.1 -farc.2 -farc.3],
 [0],
-[ignore],
-[stderr])
-])
+[Creating file
+Creating archive
+Testing archive
+file
+],
+[Creating file
+Creating archive
+Testing archive
+],
+[],[],
+[gnu, pax])
 
 AT_CLEANUP
+

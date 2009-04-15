@@ -1,7 +1,7 @@
 /* A tar (tape archiver) program.
 
    Copyright (C) 1988, 1992, 1993, 1994, 1995, 1996, 1997, 1999, 2000,
-   2001, 2003, 2004, 2005, 2006, 2007 Free Software Foundation, Inc.
+   2001, 2003, 2004, 2005, 2006, 2007, 2009 Free Software Foundation, Inc.
 
    Written by John Gilmore, starting 1985-08-25.
 
@@ -249,8 +249,11 @@ enum
   ANCHORED_OPTION = CHAR_MAX + 1,
   ATIME_PRESERVE_OPTION,
   BACKUP_OPTION,
+  CHECK_DEVICE_OPTION,
   CHECKPOINT_OPTION,
+  CHECKPOINT_ACTION_OPTION,
   DELAY_DIRECTORY_RESTORE_OPTION,
+  HARD_DEREFERENCE_OPTION,
   DELETE_OPTION,
   EXCLUDE_CACHES_OPTION,
   EXCLUDE_CACHES_UNDER_OPTION,
@@ -270,13 +273,18 @@ enum
   IGNORE_FAILED_READ_OPTION,
   INDEX_FILE_OPTION,
   KEEP_NEWER_FILES_OPTION,
+  LZMA_OPTION,
+  LZOP_OPTION,
   MODE_OPTION,
   MTIME_OPTION,
   NEWER_MTIME_OPTION,
   NO_ANCHORED_OPTION,
+  NO_AUTO_COMPRESS_OPTION,
+  NO_CHECK_DEVICE_OPTION,
   NO_DELAY_DIRECTORY_RESTORE_OPTION,
   NO_IGNORE_CASE_OPTION,
   NO_IGNORE_COMMAND_ERROR_OPTION,
+  NO_NULL_OPTION,
   NO_OVERWRITE_DIR_OPTION,
   NO_QUOTE_CHARS_OPTION,
   NO_RECURSION_OPTION,
@@ -318,7 +326,6 @@ enum
   TRANSFORM_OPTION,
   UNQUOTE_OPTION,
   USAGE_OPTION,
-  USE_COMPRESS_PROGRAM_OPTION,
   UTC_OPTION,
   VERSION_OPTION,
   VOLNO_FILE_OPTION,
@@ -347,7 +354,7 @@ The version control may be set with --backup or VERSION_CONTROL, values are:\n\n
 
 /* NOTE:
 
-   Available option letters are DEIJQY and aeqy. Consider the following
+   Available option letters are DEQY and eqy. Consider the following
    assignments:
 
    [For Solaris tar compatibility =/= Is it important at all?]
@@ -355,7 +362,6 @@ The version control may be set with --backup or VERSION_CONTROL, values are:\n\n
    E  use extended headers (--format=posix)
 
    [q  alias for --occurrence=1 =/= this would better be used for quiet?]
-   [I  same as T =/= will harm star compatibility]
 
    y  per-file gzip compression
    Y  per-block gzip compression */
@@ -410,6 +416,12 @@ static struct argp_option options[] = {
       " NUMBER defaults to 1"), GRID+1 },
   {"seek", 'n', NULL, 0,
    N_("archive is seekable"), GRID+1 },
+  {"no-check-device", NO_CHECK_DEVICE_OPTION, NULL, 0,
+   N_("do not check device numbers when creating incremental archives"),
+   GRID+1 },
+  {"check-device", CHECK_DEVICE_OPTION, NULL, 0,
+   N_("check device numbers when creating incremental archives (default)"),
+   GRID+1 },
 #undef GRID
 
 #define GRID 30
@@ -576,20 +588,36 @@ static struct argp_option options[] = {
    N_("control pax keywords"), GRID+8 },
   {"label", 'V', N_("TEXT"), 0,
    N_("create archive with volume name TEXT; at list/extract time, use TEXT as a globbing pattern for volume name"), GRID+8 },
-  {"bzip2", 'j', 0, 0,
-   N_("filter the archive through bzip2"), GRID+8 },
-  {"gzip", 'z', 0, 0,
-   N_("filter the archive through gzip"), GRID+8 },
-  {"gunzip", 0, 0, OPTION_ALIAS, NULL, GRID+8 },
-  {"ungzip", 0, 0, OPTION_ALIAS, NULL, GRID+8 },
-  {"compress", 'Z', 0, 0,
-   N_("filter the archive through compress"), GRID+8 },
-  {"uncompress", 0, 0, OPTION_ALIAS, NULL, GRID+8 },
-  {"use-compress-program", USE_COMPRESS_PROGRAM_OPTION, N_("PROG"), 0,
-   N_("filter through PROG (must accept -d)"), GRID+8 },
 #undef GRID
 
 #define GRID 90
+  {NULL, 0, NULL, 0,
+   N_("Compression options:"), GRID },
+  {"auto-compress", 'a', 0, 0,
+   N_("use archive suffix to determine the compression program"), GRID+1 },
+  {"no-auto-compress", NO_AUTO_COMPRESS_OPTION, 0, 0,
+   N_("do not use archive suffix to determine the compression program"),
+   GRID+1 },
+  {"bzip2", 'j', 0, 0,
+   N_("filter the archive through bzip2"), GRID+1 },
+  {"gzip", 'z', 0, 0,
+   N_("filter the archive through gzip"), GRID+1 },
+  {"gunzip", 0, 0, OPTION_ALIAS, NULL, GRID+1 },
+  {"ungzip", 0, 0, OPTION_ALIAS, NULL, GRID+1 },
+  {"compress", 'Z', 0, 0,
+   N_("filter the archive through compress"), GRID+1 },
+  {"uncompress", 0, 0, OPTION_ALIAS, NULL, GRID+1 },
+  {"lzma", LZMA_OPTION, 0, 0,
+   N_("filter the archive through lzma"), GRID+1 },
+  {"lzop", LZOP_OPTION, 0, 0,
+   N_("filter the archive through lzop"), GRID+8 },
+  {"xz", 'J', 0, 0,
+   N_("filter the archive through xz"), GRID+8 },
+  {"use-compress-program", 'I', N_("PROG"), 0,
+   N_("filter through PROG (must accept -d)"), GRID+1 },
+#undef GRID
+  
+#define GRID 100
   {NULL, 0, NULL, 0,
    N_("Local file selection:"), GRID },
 
@@ -601,6 +629,8 @@ static struct argp_option options[] = {
    N_("get names to extract or create from FILE"), GRID+1 },
   {"null", NULL_OPTION, 0, 0,
    N_("-T reads null-terminated names, disable -C"), GRID+1 },
+  {"no-null", NO_NULL_OPTION, 0, 0,
+   N_("disable the effect of the previous --null option"), GRID+1 },
   {"unquote", UNQUOTE_OPTION, 0, 0,
    N_("unquote filenames read with -T (default)"), GRID+1 },
   {"no-unquote", NO_UNQUOTE_OPTION, 0, 0,
@@ -640,6 +670,8 @@ static struct argp_option options[] = {
    N_("don't strip leading `/'s from file names"), GRID+1 },
   {"dereference", 'h', 0, 0,
    N_("follow symlinks; archive and dump the files they point to"), GRID+1 },
+  {"hard-dereference", HARD_DEREFERENCE_OPTION, 0, 0,
+   N_("follow hard links; archive and dump the files they refer to"), GRID+1 },
   {"starting-file", 'K', N_("MEMBER-NAME"), 0,
    N_("begin at member MEMBER-NAME in the archive"), GRID+1 },
   {"newer", 'N', N_("DATE-OR-FILE"), 0,
@@ -653,7 +685,7 @@ static struct argp_option options[] = {
    N_("backup before removal, override usual suffix ('~' unless overridden by environment variable SIMPLE_BACKUP_SUFFIX)"), GRID+1 },
 #undef GRID
 
-#define GRID 92
+#define GRID 110
   {NULL, 0, NULL, 0,
    N_("File name transformations:"), GRID },
   {"strip-components", STRIP_COMPONENTS_OPTION, N_("NUMBER"), 0,
@@ -661,9 +693,10 @@ static struct argp_option options[] = {
    GRID+1 },
   {"transform", TRANSFORM_OPTION, N_("EXPRESSION"), 0,
    N_("use sed replace EXPRESSION to transform file names"), GRID+1 },
+  {"xform", 0, 0, OPTION_ALIAS, NULL, GRID+1 },
 #undef GRID
 
-#define GRID 95
+#define GRID 120
   {NULL, 0, NULL, 0,
    N_("File name matching options (affect both exclude and include patterns):"),
    GRID },
@@ -685,14 +718,17 @@ static struct argp_option options[] = {
    N_("wildcards match `/' (default for exclusion)"), GRID+1 },
 #undef GRID
 
-#define GRID 100
+#define GRID 130
   {NULL, 0, NULL, 0,
    N_("Informative output:"), GRID },
 
   {"verbose", 'v', 0, 0,
    N_("verbosely list files processed"), GRID+1 },
-  {"checkpoint", CHECKPOINT_OPTION, N_("[.]NUMBER"), OPTION_ARG_OPTIONAL,
+  {"checkpoint", CHECKPOINT_OPTION, N_("NUMBER"), OPTION_ARG_OPTIONAL,
    N_("display progress messages every NUMBERth record (default 10)"),
+   GRID+1 },
+  {"checkpoint-action", CHECKPOINT_ACTION_OPTION, N_("ACTION"), 0,
+   N_("execute ACTION on each checkpoint"),
    GRID+1 },
   {"check-links", 'l', 0, 0,
    N_("print a message if not all links are dumped"), GRID+1 },
@@ -726,7 +762,7 @@ static struct argp_option options[] = {
    N_("disable quoting for characters from STRING"), GRID+1 },
 #undef GRID
 
-#define GRID 110
+#define GRID 140
   {NULL, 0, NULL, 0,
    N_("Compatibility options:"), GRID },
 
@@ -734,7 +770,7 @@ static struct argp_option options[] = {
    N_("when creating, same as --old-archive; when extracting, same as --no-same-owner"), GRID+1 },
 #undef GRID
 
-#define GRID 120
+#define GRID 150
   {NULL, 0, NULL, 0,
    N_("Other options:"), GRID },
 
@@ -791,6 +827,8 @@ struct tar_args        /* Variables used during option parsing */
   char const *backup_suffix_string;   /* --suffix option argument */
   char const *version_control_string; /* --backup option argument */
   bool input_files;                /* True if some input files where given */
+  int compress_autodetect;         /* True if compression autodetection should
+				      be attempted when creating archives */
 };
 
 
@@ -828,6 +866,16 @@ exclude_vcs_files ()
     "=RELEASE-ID",
     "=meta-update",
     "=update",
+    /* Bazaar */
+    ".bzr",
+    ".bzrignore",
+    ".bzrtags",
+    /* Mercurial */
+    ".hg",
+    ".hgignore",
+    ".hgtags",
+    /* darcs */
+    "_darcs",
     NULL
   };
 
@@ -1008,6 +1056,9 @@ report_textual_dates (struct tar_args *args)
 
 static volatile int _argp_hang;
 
+/* Either NL or NUL, as decided by the --null option.  */
+static char filename_terminator;
+
 enum read_file_list_state  /* Result of reading file name from the list file */
   {
     file_list_success,     /* OK, name read successfully */
@@ -1016,16 +1067,16 @@ enum read_file_list_state  /* Result of reading file name from the list file */
     file_list_skip         /* Empty (zero-length) entry encountered, skip it */
   };
 
-/* Read from FP a sequence of characters up to FILENAME_TERMINATOR and put them
+/* Read from FP a sequence of characters up to TERM and put them
    into STK.
  */
 static enum read_file_list_state
-read_name_from_file (FILE *fp, struct obstack *stk)
+read_name_from_file (FILE *fp, struct obstack *stk, int term)
 {
   int c;
   size_t counter = 0;
 
-  for (c = getc (fp); c != EOF && c != filename_terminator; c = getc (fp))
+  for (c = getc (fp); c != EOF && c != term; c = getc (fp))
     {
       if (c == 0)
 	{
@@ -1106,7 +1157,8 @@ update_argv (const char *filename, struct argp_state *state)
   size_t new_argc;
   bool is_stdin = false;
   enum read_file_list_state read_state;
-
+  int term = filename_terminator;
+  
   if (!strcmp (filename, "-"))
     {
       is_stdin = true;
@@ -1120,7 +1172,8 @@ update_argv (const char *filename, struct argp_state *state)
 	open_fatal (filename);
     }
 
-  while ((read_state = read_name_from_file (fp, &argv_stk)) != file_list_end)
+  while ((read_state = read_name_from_file (fp, &argv_stk, term))
+	 != file_list_end)
     {
       switch (read_state)
 	{
@@ -1149,7 +1202,7 @@ update_argv (const char *filename, struct argp_state *state)
 	    obstack_1grow (&argv_stk, 0);
 	    count = 1;
 	    /* Read rest of files using new filename terminator */
-	    filename_terminator = 0;
+	    term = 0;
 	    break;
 	  }
 
@@ -1166,7 +1219,7 @@ update_argv (const char *filename, struct argp_state *state)
 
   start = obstack_finish (&argv_stk);
 
-  if (filename_terminator == 0)
+  if (term == 0)
     for (p = start; *p; p += strlen (p) + 1)
       if (p[0] == '-')
 	count++;
@@ -1182,7 +1235,7 @@ update_argv (const char *filename, struct argp_state *state)
 
   for (i = state->next, p = start; *p; p += strlen (p) + 1, i++)
     {
-      if (filename_terminator == 0 && p[0] == '-')
+      if (term == 0 && p[0] == '-')
 	state->argv[i++] = "--add-file";
       state->argv[i] = p;
     }
@@ -1228,6 +1281,14 @@ parse_opt (int key, char *arg, struct argp_state *state)
       set_subcommand_option (CAT_SUBCOMMAND);
       break;
 
+    case 'a':
+      args->compress_autodetect = true;
+      break;
+
+    case NO_AUTO_COMPRESS_OPTION:
+      args->compress_autodetect = false;
+      break;
+      
     case 'b':
       {
 	uintmax_t u;
@@ -1298,6 +1359,10 @@ parse_opt (int key, char *arg, struct argp_state *state)
       dereference_option = true;
       break;
 
+    case HARD_DEREFERENCE_OPTION:
+      hard_dereference_option = true;
+      break;
+      
     case 'i':
       /* Ignore zero blocks (eofs).  This can't be the default,
 	 because Unix tar writes two blocks of zeros, then pads out
@@ -1306,16 +1371,14 @@ parse_opt (int key, char *arg, struct argp_state *state)
       ignore_zeros_option = true;
       break;
 
-    case 'I':
-      USAGE_ERROR ((0, 0,
-		    _("Warning: the -I option is not supported;"
-		      " perhaps you meant -j or -T?")));
-      break;
-
     case 'j':
       set_use_compress_program_option ("bzip2");
       break;
 
+    case 'J':
+      set_use_compress_program_option ("xz");
+      break;
+      
     case 'k':
       /* Don't replace existing files.  */
       old_files_option = KEEP_OLD_FILES;
@@ -1347,6 +1410,14 @@ parse_opt (int key, char *arg, struct argp_state *state)
       }
       break;
 
+    case LZMA_OPTION:
+      set_use_compress_program_option ("lzma");
+      break;
+      
+    case LZOP_OPTION:
+      set_use_compress_program_option ("lzop");
+      break;
+      
     case 'm':
       touch_option = true;
       break;
@@ -1520,6 +1591,14 @@ parse_opt (int key, char *arg, struct argp_state *state)
 			" on this platform")));
       break;
 
+    case CHECK_DEVICE_OPTION:
+      check_device_option = true;
+      break;
+      
+    case NO_CHECK_DEVICE_OPTION:
+      check_device_option = false;
+      break;
+      
     case CHECKPOINT_OPTION:
       if (arg)
 	{
@@ -1527,7 +1606,7 @@ parse_opt (int key, char *arg, struct argp_state *state)
 
 	  if (*arg == '.')
 	    {
-	      checkpoint_style = checkpoint_dot;
+	      checkpoint_compile_action (".");
 	      arg++;
 	    }
 	  checkpoint_option = strtoul (arg, &p, 0);
@@ -1536,9 +1615,13 @@ parse_opt (int key, char *arg, struct argp_state *state)
 			  _("--checkpoint value is not an integer")));
 	}
       else
-	checkpoint_option = 10;
+	checkpoint_option = DEFAULT_CHECKPOINT;
       break;
 
+    case CHECKPOINT_ACTION_OPTION:
+      checkpoint_compile_action (arg);
+      break;
+      
     case BACKUP_OPTION:
       backup_option = true;
       if (arg)
@@ -1684,6 +1767,10 @@ parse_opt (int key, char *arg, struct argp_state *state)
       filename_terminator = '\0';
       break;
 
+    case NO_NULL_OPTION:
+      filename_terminator = '\n';
+      break;
+
     case NUMERIC_OWNER_OPTION:
       numeric_owner_option = true;
       break;
@@ -1746,6 +1833,8 @@ parse_opt (int key, char *arg, struct argp_state *state)
       /* FIXME: What it is good for? */
       same_permissions_option = true;
       same_order_option = true;
+      WARN ((0, 0, _("The --preserve option is deprecated, "
+		     "use --preserve-permissions --preserve-order instead")));
       break;
 
     case RECORD_SIZE_OPTION:
@@ -1829,7 +1918,7 @@ parse_opt (int key, char *arg, struct argp_state *state)
       set_transform_expr (arg);
       break;
 
-    case USE_COMPRESS_PROGRAM_OPTION:
+    case 'I':
       set_use_compress_program_option (arg);
       break;
 
@@ -2015,7 +2104,8 @@ decode_options (int argc, char **argv)
   args.backup_suffix_string = getenv ("SIMPLE_BACKUP_SUFFIX");
   args.version_control_string = 0;
   args.input_files = false;
-
+  args.compress_autodetect = false;
+  
   subcommand_option = UNKNOWN_SUBCOMMAND;
   archive_format = DEFAULT_FORMAT;
   blocking_factor = DEFAULT_BLOCKING;
@@ -2031,6 +2121,8 @@ decode_options (int argc, char **argv)
   owner_option = -1;
   group_option = -1;
 
+  check_device_option = true;
+  
   /* Convert old-style tar call by exploding option element and rearranging
      options accordingly.  */
 
@@ -2267,6 +2359,13 @@ decode_options (int argc, char **argv)
   else if (utc_option)
     verbose_option = 2;
 
+  if (tape_length_option && tape_length_option < record_size)
+    USAGE_ERROR ((0, 0, _("Volume length cannot be less than record size")));
+
+  if (same_order_option && listed_incremental_option)
+    USAGE_ERROR ((0, 0, _("--preserve-order is not compatible with "
+			  "--listed-incremental")));
+  
   /* Forbid using -c with no input files whatsoever.  Check that `-f -',
      explicit or implied, is used correctly.  */
 
@@ -2276,6 +2375,10 @@ decode_options (int argc, char **argv)
       if (!args.input_files && !files_from_option)
 	USAGE_ERROR ((0, 0,
 		      _("Cowardly refusing to create an empty archive")));
+      if (args.compress_autodetect && archive_names
+	  && strcmp (archive_name_array[0], "-"))
+	set_comression_program_by_suffix (archive_name_array[0],
+					  use_compress_program_option);
       break;
 
     case EXTRACT_SUBCOMMAND:
@@ -2328,6 +2431,8 @@ decode_options (int argc, char **argv)
 	backup_option = false;
     }
 
+  checkpoint_finish_compile ();
+  
   if (verbose_option)
     report_textual_dates (&args);
 }
@@ -2434,7 +2539,7 @@ main (int argc, char **argv)
   name_term ();
 
   if (exit_status == TAREXIT_FAILURE)
-    error (0, 0, _("Error exit delayed from previous errors"));
+    error (0, 0, _("Exiting with failure status due to previous errors"));
 
   if (stdlis == stdout)
     close_stdout ();

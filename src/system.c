@@ -1,6 +1,7 @@
 /* System-dependent calls for tar.
 
-   Copyright (C) 2003, 2004, 2005, 2006, 2007 Free Software Foundation, Inc.
+   Copyright (C) 2003, 2004, 2005, 2006, 2007,
+   2008 Free Software Foundation, Inc.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -17,7 +18,6 @@
    51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.  */
 
 #include <system.h>
-#include <setenv.h>
 
 #include "common.h"
 #include <rmt.h>
@@ -52,12 +52,7 @@ sys_detect_dev_null_output (void)
 }
 
 void
-sys_drain_input_pipe (void)
-{
-}
-
-void
-sys_wait_for_child (pid_t child_pid)
+sys_wait_for_child (pid_t child_pid, bool eof)
 {
 }
 
@@ -161,26 +156,8 @@ sys_detect_dev_null_output (void)
 			 && archive_stat.st_ino == dev_null_stat.st_ino));
 }
 
-/* Manage to fully drain a pipe we might be reading, so to not break it on
-   the producer after the EOF block.  FIXME: one of these days, GNU tar
-   might become clever enough to just stop working, once there is no more
-   work to do, we might have to revise this area in such time.  */
-
 void
-sys_drain_input_pipe (void)
-{
-  size_t r;
-
-  if (access_mode == ACCESS_READ
-      && ! _isrmt (archive)
-      && (S_ISFIFO (archive_stat.st_mode) || S_ISSOCK (archive_stat.st_mode)))
-    while ((r = rmtread (archive, record_start->buffer, record_size)) != 0
-	   && r != SAFE_READ_ERROR)
-      continue;
-}
-
-void
-sys_wait_for_child (pid_t child_pid)
+sys_wait_for_child (pid_t child_pid, bool eof)
 {
   if (child_pid)
     {
@@ -194,8 +171,11 @@ sys_wait_for_child (pid_t child_pid)
 	  }
 
       if (WIFSIGNALED (wait_status))
-	ERROR ((0, 0, _("Child died with signal %d"),
-		WTERMSIG (wait_status)));
+	{
+	  int sig = WTERMSIG (wait_status);
+	  if (!(!eof && sig == SIGPIPE))
+	    ERROR ((0, 0, _("Child died with signal %d"), sig));
+	}
       else if (WEXITSTATUS (wait_status) != 0)
 	ERROR ((0, 0, _("Child returned status %d"),
 		WEXITSTATUS (wait_status)));
@@ -773,9 +753,10 @@ sys_exec_info_script (const char **archive_name, int volume_number)
   char *argv[4];
   char uintbuf[UINTMAX_STRSIZE_BOUND];
   int p[2];
-
+  static RETSIGTYPE (*saved_handler) (int sig);
+  
   xpipe (p);
-  pipe_handler = signal (SIGPIPE, SIG_IGN);
+  saved_handler = signal (SIGPIPE, SIG_IGN);
 
   pid = xfork ();
 
@@ -785,7 +766,7 @@ sys_exec_info_script (const char **archive_name, int volume_number)
 
       int rc;
       int status;
-      char *buf;
+      char *buf = NULL;
       size_t size = 0;
       FILE *fp;
 
@@ -800,10 +781,13 @@ sys_exec_info_script (const char **archive_name, int volume_number)
       while (waitpid (pid, &status, 0) == -1)
 	if (errno != EINTR)
 	  {
+	    signal (SIGPIPE, saved_handler);
 	    waitpid_error (info_script_option);
 	    return -1;
 	  }
 
+      signal (SIGPIPE, saved_handler);
+      
       if (WIFEXITED (status))
 	{
 	  if (WEXITSTATUS (status) == 0 && rc > 0)
@@ -821,6 +805,8 @@ sys_exec_info_script (const char **archive_name, int volume_number)
   setenv ("TAR_VERSION", PACKAGE_VERSION, 1);
   setenv ("TAR_ARCHIVE", *archive_name, 1);
   setenv ("TAR_VOLUME", STRINGIFY_BIGINT (volume_number, uintbuf), 1);
+  setenv ("TAR_BLOCKING_FACTOR",
+	  STRINGIFY_BIGINT (blocking_factor, uintbuf), 1);
   setenv ("TAR_SUBCOMMAND", subcommand_string (subcommand_option), 1);
   setenv ("TAR_FORMAT",
 	  archive_format_string (current_format == DEFAULT_FORMAT ?
@@ -839,5 +825,51 @@ sys_exec_info_script (const char **archive_name, int volume_number)
   exec_fatal (info_script_option);
 }
 
+void
+sys_exec_checkpoint_script (const char *script_name,
+			    const char *archive_name,
+			    int checkpoint_number)
+{
+  pid_t pid;
+  char *argv[4];
+  char uintbuf[UINTMAX_STRSIZE_BOUND];
+
+  pid = xfork ();
+
+  if (pid != 0)
+    {
+      /* Master */
+
+      int status;
+
+      while (waitpid (pid, &status, 0) == -1)
+	if (errno != EINTR)
+	  {
+	    waitpid_error (script_name);
+	    break;
+	  }
+
+      return;
+    }
+
+  /* Child */
+  setenv ("TAR_VERSION", PACKAGE_VERSION, 1);
+  setenv ("TAR_ARCHIVE", archive_name, 1);
+  setenv ("TAR_CHECKPOINT", STRINGIFY_BIGINT (checkpoint_number, uintbuf), 1);
+  setenv ("TAR_BLOCKING_FACTOR",
+	  STRINGIFY_BIGINT (blocking_factor, uintbuf), 1);
+  setenv ("TAR_SUBCOMMAND", subcommand_string (subcommand_option), 1);
+  setenv ("TAR_FORMAT",
+	  archive_format_string (current_format == DEFAULT_FORMAT ?
+				 archive_format : current_format), 1);
+  argv[0] = "/bin/sh";
+  argv[1] = "-c";
+  argv[2] = (char*) script_name;
+  argv[3] = NULL;
+
+  execv (argv[0], argv);
+
+  exec_fatal (script_name);
+}
 
 #endif /* not MSDOS */

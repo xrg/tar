@@ -14,28 +14,26 @@
 # GNU General Public License for more details.
 
 # You should have received a copy of the GNU General Public License
-# along with this program; if not, write to the Free Software
-# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
-# 02110-1301, USA.
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-# Tar 1.18 in reading mode silently ignored any invalid files smaller than 512
-# Reported by: Ian <isoboroff@gmail.com> on Thu, 23 Aug 2007 15:15:51 -0400
-# References: <ebd55800708231215l5f8f52c0i9018fdb60bb202b@mail.gmail.com>
-#             http://lists.gnu.org/archive/html/bug-tar/2007-08/msg00038.html
+# Fixing improper small file recognition in version 1.18 (see shortfile.at
+# and ChangeLog:2007-08-24), introduced another bug: when updating a
+# non-existing archive, tar-1.19 complained about its not being a tar archive
+# and exited immediately, leaving the created zero-sized file after it.
+#
+# This bug was fixed on 2007-12-05.
+#
+# Reported by: Ozan @,{C}a@v{g}layan <ozancag@gmail.com>
+# References: <4755A82A.9060607@gmail.com>
 
-AT_SETUP([short input files])
-AT_KEYWORDS([shortfile shortfile0])
+AT_SETUP([updating short archives])
+AT_KEYWORDS([shortfile shortfile1 shortupd])
 
 AT_TAR_CHECK([
-genfile --length 511 --file foo || exit 5
-tar tf foo
+touch foo
+tar uf archive foo
 ],
-[2],
-[],
-[tar: This does not look like a tar archive
-tar: Exiting with failure status due to previous errors
-],
-[],[],[gnu])
+[0])
 
 AT_CLEANUP
 
