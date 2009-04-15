@@ -114,6 +114,17 @@ free_exclude (struct exclude *ex)
   free (ex);
 }
 
+/** Copy the exclude structure to a new place */
+void copy_exclude(struct exclude * target, struct exclude const* source){
+	
+	if (target->exclude_alloc < source->exclude_count){
+		target->exclude_alloc = source->exclude_count;
+		target->exclude = xrealloc(target->exclude,sizeof(struct patopts) * target->exclude_alloc);
+		}
+	memcpy(target->exclude,source->exclude,sizeof(struct patopts)* source->exclude_count);
+	target->exclude_count=source->exclude_count;
+}
+
 /* Return zero if PATTERN matches F, obeying OPTIONS, except that
    (unlike fnmatch) wildcards are disabled in PATTERN.  */
 
@@ -252,6 +263,8 @@ add_exclude_file (void (*add_func) (struct exclude *, char const *, int),
   if (!use_stdin && fclose (in) != 0)
     e = errno;
 
+	/* FIXME: valgrind reports a leak here, but the 'free' at the end
+	   should have fixed it */
   buf = xrealloc (buf, buf_count + 1);
 
   for (pattern = p = buf, lim = buf + buf_count;  p <= lim;  p++)
@@ -262,6 +275,7 @@ add_exclude_file (void (*add_func) (struct exclude *, char const *, int),
 	pattern = p + 1;
       }
 
+  free(buf);
   errno = e;
   return e ? -1 : 0;
 }

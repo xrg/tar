@@ -148,7 +148,7 @@ GLOBAL bool dereference_option;
 GLOBAL int check_links_option;
 
 /* Patterns that match file names to be excluded.  */
-GLOBAL struct exclude *excluded;
+GLOBAL struct exclude *global_excluded;
 
 enum exclusion_tag_type
   {
@@ -161,6 +161,10 @@ enum exclusion_tag_type
     exclusion_tag_under,
     /* Exclude entire directory  */
     exclusion_tag_all,
+    /* Scan file and add contents in auto-exclude, apply localy*/
+    exclusion_tag_auto,
+    /* Auto-exclude, recursively */
+    exclusion_tag_autorec
   };
 
 /* Specified value to be put into tar file in place of stat () results, or
@@ -435,7 +439,7 @@ bool cachedir_file_p (const char *name);
 bool file_dumpable_p (struct tar_stat_info *st);
 void create_archive (void);
 void pad_archive (off_t size_left);
-void dump_file (const char *st, int top_level, dev_t parent_device);
+void dump_file (const char *st, int top_level, dev_t parent_device, struct exclude* excl);
 union block *start_header (struct tar_stat_info *st);
 void finish_header (struct tar_stat_info *st, union block *header,
 		    off_t block_ordinal);
@@ -448,7 +452,9 @@ void check_links (void);
 void exclusion_tag_warning (const char *dirname, const char *tagname,
 			    const char *message);
 enum exclusion_tag_type check_exclusion_tags (char *dirname,
-					      const char **tag_file_name);
+					      const char **tag_file_name,
+					      struct exclude ** excl,
+					      struct exclude **nexcl);
      
 #define GID_TO_CHARS(val, where) gid_to_chars (val, where, sizeof (where))
 #define MAJOR_TO_CHARS(val, where) major_to_chars (val, where, sizeof (where))
@@ -637,7 +643,7 @@ char *new_name (const char *dir_name, const char *name);
 size_t stripped_prefix_len (char const *file_name, size_t num);
 bool all_names_found (struct tar_stat_info *st);
 
-bool excluded_name (char const *name);
+bool excluded_name (char const *name, struct exclude const * excl);
 
 void add_avoided_name (char const *name);
 bool is_avoided_name (char const *name);

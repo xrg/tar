@@ -71,14 +71,16 @@ exclusion_tag_warning (const char *dirname, const char *tagname,
 }
 
 enum exclusion_tag_type 
-check_exclusion_tags (char *dirname, const char **tag_file_name)
+check_exclusion_tags (char *dirname, const char **tag_file_name, struct exclude** excl, struct exclude** nexcl)
 {
-  static char *tagname;
-  static size_t tagsize;
+  static char *tagname = NULL;
+  static size_t tagsize = 0;
   struct exclusion_tag *tag;
   size_t dlen = strlen (dirname);
   int addslash = dirname[dlen-1] != '/';
   char *nptr = NULL;
+  struct exclude* pexcl= NULL;
+  if (excl) pexcl= *excl; /* Keep a copy of the original exclude struct */
   
   for (tag = exclusion_tags; tag; tag = tag->next)
     {
@@ -87,6 +89,7 @@ check_exclusion_tags (char *dirname, const char **tag_file_name)
 	{
 	  tagsize = size;
 	  tagname = xrealloc (tagname, tagsize);
+	  nptr = NULL;
 	}
 
       if (!nptr)
@@ -100,13 +103,59 @@ check_exclusion_tags (char *dirname, const char **tag_file_name)
       if (access (tagname, F_OK) == 0
 	  && (!tag->predicate || tag->predicate (tagname)))
 	{
+	  /* In the auto-exclude case, we need to process it here,
+	     because we may find more than one tag(s) */
+	  if ((tag->type == exclusion_tag_auto) ||
+	  	(tag->type == exclusion_tag_autorec))
+	  {
+	  	if (! pexcl)
+	  		continue; /* Will not modify lists, carry on looking */
+	  
+	  	if (tag->type == exclusion_tag_autorec && (nexcl) && (*nexcl == pexcl))
+	  		*nexcl = NULL;
+	  	if (*excl == pexcl){
+	  		/* First tag encountered, copy parent's excludes */
+	  		*excl = new_exclude();
+			copy_exclude(*excl,pexcl);
+			if (nexcl && (! *nexcl))
+				*nexcl = *excl;  /* Use the same for nexcl, excl */
+		}
+
+	  	if (add_exclude_file (add_exclude, *excl, tagname,
+			EXCLUDE_WILDCARDS , '\n') != 0)
+		{
+			int e = errno;
+			WARN ((0, e, _("Cannot add exclude file %s"),quotearg_n (1, tagname)));
+			continue;
+		}else if (verbose_option){
+			WARN((0, 0, _("Auto exclude file found: %s"),quotearg_n (1, tagname)));
+		}
+		
+		if (tag->type == exclusion_tag_autorec && (nexcl) && (*nexcl != *excl))
+		{
+			if (*nexcl == NULL) {
+				*nexcl = new_exclude();
+				copy_exclude(*nexcl,pexcl);
+			}
+			/* Sadly, we need to re-scan the exclude file here because it will
+			   be appended to a different list */
+			if (add_exclude_file (add_exclude, *nexcl, tagname,
+				EXCLUDE_WILDCARDS , '\n') != 0)
+			{
+				int e = errno;
+				WARN ((0, e, _("Cannot add exclude file %s"),quotearg_n (1, tagname)));
+			}
+		}
+
+	  } else {
 	  if (tag_file_name)
 	    *tag_file_name = tag->name;
 	  return tag->type;
 	}
     }
+    }
 
-  return exclusion_tag_none;
+  return exclusion_tag_none; /* Also the value for auto-excludes */
 }
 
 /* Exclusion predicate to test if the named file (usually "CACHEDIR.TAG")
@@ -1090,7 +1139,7 @@ dump_regular_file (int fd, struct tar_stat_info *st)
 
 static void
 dump_dir0 (char *directory,
-	   struct tar_stat_info *st, int top_level, dev_t parent_device)
+	   struct tar_stat_info *st, int top_level, dev_t parent_device, struct exclude *excl)
 {
   dev_t our_device = st->stat.st_dev;
   const char *tag_file_name;
@@ -1181,13 +1230,17 @@ dump_dir0 (char *directory,
     {
       char *name_buf;
       size_t name_size;
+      struct exclude *excludes=excl, *nexcludes=excl;
       
-      switch (check_exclusion_tags (st->orig_file_name, &tag_file_name))
+             /*Note: check_e_t may alter the contents of excludes, nexcludes.. */
+      switch (check_exclusion_tags (st->orig_file_name, &tag_file_name,&excludes,&nexcludes))
 	{
 	case exclusion_tag_all:
 	  /* Handled in dump_file0 */
 	  break;
 	  
+	case exclusion_tag_autorec:
+	case exclusion_tag_auto:
 	case exclusion_tag_none:
 	  {
 	    char const *entry;
@@ -1208,8 +1261,8 @@ dump_dir0 (char *directory,
 		    name_buf = xrealloc (name_buf, name_size + 1);
 		  }
 		strcpy (name_buf + name_len, entry);
-		if (!excluded_name (name_buf))
-		  dump_file (name_buf, 0, our_device);
+		if (!excluded_name (name_buf,excludes))
+		  dump_file (name_buf, 0, our_device,nexcludes);
 	      }
 	    
 	    free (name_buf);
@@ -1223,7 +1276,7 @@ dump_dir0 (char *directory,
 	  name_buf = xmalloc (name_size);
 	  strcpy (name_buf, st->orig_file_name);
 	  strcat (name_buf, tag_file_name);
-	  dump_file (name_buf, 0, our_device);
+	  dump_file (name_buf, 0, our_device,excludes);
 	  free (name_buf);
 	  break;
       
@@ -1232,6 +1285,10 @@ dump_dir0 (char *directory,
 				 _("contents not dumped"));
 	  break;
 	}
+	if ((nexcludes != excl) && (nexcludes != excludes))
+		free_exclude(nexcludes);
+	if (excludes != excl)
+		free_exclude(excludes);
     }
 }
 
@@ -1249,7 +1306,7 @@ ensure_slash (char **pstr)
 }
 
 static bool
-dump_dir (int fd, struct tar_stat_info *st, int top_level, dev_t parent_device)
+dump_dir (int fd, struct tar_stat_info *st, int top_level, dev_t parent_device, struct exclude * excl)
 {
   char *directory = fdsavedir (fd);
   if (!directory)
@@ -1258,7 +1315,7 @@ dump_dir (int fd, struct tar_stat_info *st, int top_level, dev_t parent_device)
       return false;
     }
 
-  dump_dir0 (directory, st, top_level, parent_device);
+  dump_dir0 (directory, st, top_level, parent_device,excl);
 
   free (directory);
   return true;
@@ -1271,6 +1328,7 @@ void
 create_archive (void)
 {
   const char *p;
+  struct exclude* excluded = global_excluded;
 
   open_archive (ACCESS_WRITE);
   buffer_write_global_xheader ();
@@ -1284,12 +1342,12 @@ create_archive (void)
       collect_and_sort_names ();
 
       while ((p = name_from_list ()) != NULL)
-	if (!excluded_name (p))
-	  dump_file (p, -1, (dev_t) 0);
+	if (!excluded_name (p,excluded))
+	  dump_file (p, -1, (dev_t) 0,excluded);
 
       blank_name_list ();
       while ((p = name_from_list ()) != NULL)
-	if (!excluded_name (p))
+	if (!excluded_name (p,excluded))
 	  {
 	    size_t plen = strlen (p);
 	    if (buffer_size <= plen)
@@ -1315,7 +1373,7 @@ create_archive (void)
 			  buffer = xrealloc (buffer, buffer_size);
  			}
 		      strcpy (buffer + plen, q + 1);
-		      dump_file (buffer, -1, (dev_t) 0);
+		      dump_file (buffer, -1, (dev_t) 0,excluded);
 		    }
 		  q += qlen + 1;
 		}
@@ -1325,8 +1383,8 @@ create_archive (void)
   else
     {
       while ((p = name_next (1)) != NULL)
-	if (!excluded_name (p))
-	  dump_file (p, 1, (dev_t) 0);
+	if (!excluded_name (p,excluded))
+	  dump_file (p, 1, (dev_t) 0,excluded);
     }
 
   write_eot ();
@@ -1476,7 +1534,7 @@ check_links (void)
 
 static void
 dump_file0 (struct tar_stat_info *st, const char *p,
-	    int top_level, dev_t parent_device)
+	    int top_level, dev_t parent_device, struct exclude* excluded)
 {
   union block *header;
   char type;
@@ -1582,7 +1640,7 @@ dump_file0 (struct tar_stat_info *st, const char *p,
 	  ensure_slash (&st->orig_file_name);
 	  ensure_slash (&st->file_name);
 
-	  if (check_exclusion_tags (st->orig_file_name, &tag_file_name)
+	  if (check_exclusion_tags (st->orig_file_name, &tag_file_name,NULL,NULL)
 	      == exclusion_tag_all)
 	    {
 	      exclusion_tag_warning (st->orig_file_name, tag_file_name,
@@ -1590,7 +1648,7 @@ dump_file0 (struct tar_stat_info *st, const char *p,
 	      return;
 	    }
 	  
-	  ok = dump_dir (fd, st, top_level, parent_device);
+	  ok = dump_dir (fd, st, top_level, parent_device,excluded);
 
 	  /* dump_dir consumes FD if successful.  */
 	  if (ok)
@@ -1778,11 +1836,11 @@ dump_file0 (struct tar_stat_info *st, const char *p,
 }
 
 void
-dump_file (const char *p, int top_level, dev_t parent_device)
+dump_file (const char *p, int top_level, dev_t parent_device, struct exclude* excluded)
 {
   struct tar_stat_info st;
   tar_stat_init (&st);
-  dump_file0 (&st, p, top_level, parent_device);
+  dump_file0 (&st, p, top_level, parent_device,excluded);
   if (listed_incremental_option)
     update_parent_directory (p);
   tar_stat_destroy (&st);

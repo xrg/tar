@@ -100,7 +100,7 @@ read_and (void (*do_something) (void))
 		      mtime.tv_nsec = 0,
 		      current_stat_info.mtime = mtime,
 		      OLDER_TAR_STAT_TIME (current_stat_info, m)))
-	      || excluded_name (current_stat_info.file_name))
+	      || excluded_name (current_stat_info.file_name,global_excluded))
 	    {
 	      switch (current_header->header.typeflag)
 		{

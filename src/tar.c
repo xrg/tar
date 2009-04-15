@@ -260,6 +260,8 @@ enum
   EXCLUDE_TAG_UNDER_OPTION,
   EXCLUDE_TAG_ALL_OPTION,
   EXCLUDE_VCS_OPTION,
+  EXCLUDE_AUTO_OPTION,
+  EXCLUDE_AUTOREC_OPTION,
   FORCE_LOCAL_OPTION,
   GROUP_OPTION,
   HANG_OPTION,
@@ -624,6 +626,10 @@ static struct argp_option options[] = {
    N_("exclude directories containing FILE"), GRID+1 },
   {"exclude-vcs", EXCLUDE_VCS_OPTION, NULL, 0,
    N_("exclude version control system directories"), GRID+1 },
+  {"exclude-autofile", EXCLUDE_AUTO_OPTION, N_("FILE"),0,
+   N_("in each directory scanned, use this file for more exclude patterns. Use .cvsignore for example."), GRID+1 },
+  {"exclude-auto", EXCLUDE_AUTOREC_OPTION, N_("FILE"),0,
+   N_("in each directory scanned, use this file for more exclude patterns, recursively. Use .gitignore for example."), GRID+1 },
   {"no-recursion", NO_RECURSION_OPTION, 0, 0,
    N_("avoid descending automatically in directories"), GRID+1 },
   {"one-file-system", ONE_FILE_SYSTEM_OPTION, 0, 0,
@@ -826,7 +832,7 @@ exclude_vcs_files ()
   };
 
   for (i = 0; vcs_file[i]; i++)
-    add_exclude (excluded, vcs_file[i], 0);
+    add_exclude (global_excluded, vcs_file[i], 0);
 }
 
 
@@ -1481,7 +1487,7 @@ parse_opt (int key, char *arg, struct argp_state *state)
       break;
 
     case 'X':
-      if (add_exclude_file (add_exclude, excluded, arg,
+      if (add_exclude_file (add_exclude, global_excluded, arg,
 			    MAKE_EXCL_OPTIONS (args), '\n')
 	  != 0)
 	{
@@ -1552,7 +1558,7 @@ parse_opt (int key, char *arg, struct argp_state *state)
       break;
 
     case EXCLUDE_OPTION:
-      add_exclude (excluded, arg, MAKE_EXCL_OPTIONS (args));
+      add_exclude (global_excluded, arg, MAKE_EXCL_OPTIONS (args));
       break;
 
     case EXCLUDE_CACHES_OPTION:
@@ -1586,6 +1592,14 @@ parse_opt (int key, char *arg, struct argp_state *state)
       exclude_vcs_files ();
       break;
       
+    case EXCLUDE_AUTO_OPTION:
+      add_exclusion_tag (arg, exclusion_tag_auto, NULL);
+      break;
+
+    case EXCLUDE_AUTOREC_OPTION:
+      add_exclusion_tag (arg, exclusion_tag_autorec, NULL);
+      break;
+
     case FORCE_LOCAL_OPTION:
       force_local_option = true;
       break;
@@ -2006,7 +2020,7 @@ decode_options (int argc, char **argv)
   archive_format = DEFAULT_FORMAT;
   blocking_factor = DEFAULT_BLOCKING;
   record_size = DEFAULT_BLOCKING * BLOCKSIZE;
-  excluded = new_exclude ();
+  global_excluded = new_exclude ();
   newer_mtime_option.tv_sec = TYPE_MINIMUM (time_t);
   newer_mtime_option.tv_nsec = -1;
   recursion_option = FNM_LEADING_DIR;

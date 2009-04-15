@@ -193,14 +193,14 @@ update_archive (void)
 
     while ((file_name = name_from_list ()) != NULL)
       {
-	if (excluded_name (file_name))
+	if (excluded_name (file_name,global_excluded))
 	  continue;
 	if (interactive_option && !confirm ("add", file_name))
 	  continue;
 	if (subcommand_option == CAT_SUBCOMMAND)
 	  append_file (file_name);
 	else
-	  dump_file (file_name, 1, (dev_t) 0);
+	  dump_file (file_name, 1, (dev_t) 0,global_excluded);
       }
   }
 

@@ -41,3 +41,4 @@ void add_exclude (struct exclude *, char const *, int);
 int add_exclude_file (void (*) (struct exclude *, char const *, int),
 		      struct exclude *, char const *, int, char);
 bool excluded_filename (struct exclude const *, char const *);
+void copy_exclude(struct exclude* target, struct exclude const* source);

@@ -930,7 +930,7 @@ new_name (const char *file_name, const char *name)
 
 /* Return nonzero if file NAME is excluded.  */
 bool
-excluded_name (char const *name)
+excluded_name (char const *name, struct exclude const * excluded)
 {
   return excluded_file_name (excluded, name + FILE_SYSTEM_PREFIX_LEN (name));
 }

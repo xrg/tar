@@ -233,7 +233,8 @@ procdir (char *name_buffer, struct stat *stat_data,
 	 dev_t device,
 	 enum children children,
 	 bool verbose,
-	 char *entry)
+	 char *entry,
+	 struct exclude **excl)
 {
   struct directory *directory;
   bool nfs = NFS_FILE_STAT (*stat_data);
@@ -338,7 +339,7 @@ procdir (char *name_buffer, struct stat *stat_data,
     const char *tag_file_name;
     size_t len;
     
-    switch (check_exclusion_tags (name_buffer, &tag_file_name))
+    switch (check_exclusion_tags (name_buffer, &tag_file_name,excl,NULL))
       {
       case exclusion_tag_all:
 	/* This warning can be duplicated by code in dump_file0, but only
@@ -508,6 +509,7 @@ scan_directory (char *dir, dev_t device)
   size_t name_length;		/* used length in name_buffer */
   struct stat stat_data;
   struct directory *directory;
+  struct exclude* excluded= global_excluded;
   
   if (! dirp)
     savedir_error (dir);
@@ -531,7 +533,7 @@ scan_directory (char *dir, dev_t device)
     }
 
   directory = procdir (name_buffer, &stat_data, device, NO_CHILDREN, false,
-		       NULL);
+		       NULL,&excluded);
   
   if (dirp && directory->children != NO_CHILDREN)
     {
@@ -555,7 +557,7 @@ scan_directory (char *dir, dev_t device)
 
 	  if (*entry == 'I') /* Ignored entry */
 	    *entry = 'N';
-	  else if (excluded_name (name_buffer))
+	  else if (excluded_name (name_buffer,excluded))
 	    *entry = 'N';
 	  else
 	    {
@@ -571,7 +573,7 @@ scan_directory (char *dir, dev_t device)
 		  *entry = 'D';
 		  procdir (name_buffer, &stat_data, device,
 			   directory->children,
-			   verbose_option, entry);
+			   verbose_option, entry,&excluded);
 		}
 
 	      else if (one_file_system_option && device != stat_data.st_dev)
@@ -592,6 +594,8 @@ scan_directory (char *dir, dev_t device)
 	}
     }
 
+  if (excluded != global_excluded)
+  	free_exclude(excluded);
   free (name_buffer);
   if (dirp)
     free (dirp);
