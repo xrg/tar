@@ -93,6 +93,20 @@ struct exclude
     size_t exclude_count;
   };
 
+#if 0
+void dump_excludes(struct exclude const* excl){
+	if (!excl){
+		fprintf(stderr, "Dumping excludes, NULL ptr!\n");
+		return;
+	}
+	fprintf(stderr,"Dumping excludes, count=%d\n",excl->exclude_count);
+	size_t i;
+	for (i=0;i<excl->exclude_count;i++)
+		fprintf(stderr,"Pattern [%ld]: \"%s\", options %d\n",i,excl->exclude[i].pattern,excl->exclude[i].options);
+
+}
+#endif
+
 /* Return a newly allocated and empty exclude list.  */
 
 struct exclude *
@@ -110,6 +124,10 @@ new_exclude (void)
 void
 free_exclude (struct exclude *ex)
 {
+  size_t i;
+  if (ex && ex->exclude_count)
+  	for(i=0;i<ex->exclude_count;i++)
+  		free(ex->exclude[i].pattern);
   free (ex->exclude);
   free (ex);
 }
@@ -121,7 +139,13 @@ void copy_exclude(struct exclude * target, struct exclude const* source){
 		target->exclude_alloc = source->exclude_count;
 		target->exclude = xrealloc(target->exclude,sizeof(struct patopts) * target->exclude_alloc);
 		}
-	memcpy(target->exclude,source->exclude,sizeof(struct patopts)* source->exclude_count);
+	size_t i;
+	for(i=0;i<source->exclude_count;i++){
+		target->exclude[i].options=source->exclude[i].options;
+		target->exclude[i].pattern=malloc(strlen(source->exclude[i].pattern)+1);
+		strcpy(target->exclude[i].pattern,source->exclude[i].pattern);
+	}
+	/* Shallow copy: memcpy(target->exclude,source->exclude,sizeof(struct patopts)* source->exclude_count);*/
 	target->exclude_count=source->exclude_count;
 }
 
@@ -197,7 +221,9 @@ excluded_filename (struct exclude const *ex, char const *f)
     }
 }
 
-/* Append to EX the exclusion PATTERN with OPTIONS.  */
+/* Append to EX the exclusion PATTERN with OPTIONS.
+   Note, pattern must be a buffer that will be passed to the struct
+   and then be freed by free_exclude(). */
 
 void
 add_exclude (struct exclude *ex, char const *pattern, int options)
@@ -230,11 +256,10 @@ add_exclude_file (void (*add_func) (struct exclude *, char const *, int),
   bool use_stdin = filename[0] == '-' && !filename[1];
   FILE *in;
   char *buf;
-  char *p;
   char const *pattern;
-  char const *lim;
   size_t buf_alloc = (1 << 10);  /* This must be a power of two.  */
   size_t buf_count = 0;
+  /*   size_t start_count = ex->exclude_count; */
   int c;
   int e = 0;
 
@@ -245,37 +270,39 @@ add_exclude_file (void (*add_func) (struct exclude *, char const *, int),
 
   buf = xmalloc (buf_alloc);
 
-  while ((c = getc (in)) != EOF)
+  while (c != EOF)
     {
-      buf[buf_count++] = c;
-      if (buf_count == buf_alloc)
-	{
-	  buf_alloc *= 2;
-	  if (! buf_alloc)
-	    xalloc_die ();
-	  buf = xrealloc (buf, buf_alloc);
-	}
-    }
-
-  if (ferror (in))
-    e = errno;
-
-  if (!use_stdin && fclose (in) != 0)
-    e = errno;
-
-	/* FIXME: valgrind reports a leak here, but the 'free' at the end
-	   should have fixed it */
-  buf = xrealloc (buf, buf_count + 1);
-
-  for (pattern = p = buf, lim = buf + buf_count;  p <= lim;  p++)
-    if (p < lim ? *p == line_end : buf < p && p[-1])
-      {
-	*p = '\0';
-	(*add_func) (ex, pattern, options);
-	pattern = p + 1;
+      c = getc (in);
+      if ((c != line_end) && (c != EOF)) {
+        if (buf_count == buf_alloc)
+  	buf = x2realloc (buf, &buf_alloc);
+        buf[buf_count++] = c;
       }
-
-  free(buf);
-  errno = e;
-  return e ? -1 : 0;
+      else{
+      	  	/* If we have whitespace delim, trim from right */
+	  if (isspace ((unsigned char) line_end))
+	    for (; buf_count >0 ; buf_count--)
+	      if (! isspace ((unsigned char) buf[buf_count-1]))
+		break;
+	  if (!buf_count)
+	  	continue;
+      	  buf[buf_count] = '\0';
+      	  pattern = xmalloc(buf_count+1);
+      	  strcpy(pattern,buf);
+      	  (*add_func) (ex, pattern, options);
+      	  	/* Start next pattern from 0 in buffer */
+      	  buf_count = 0;
+      }
+    }
+  
+	/* TODO: should we rollback to start_count if the file contains an error? */
+    if (ferror (in))
+      e = errno;
+  
+    if (!use_stdin && fclose (in) != 0)
+      e = errno;
+  
+    free(buf);
+    errno = e;
+    return e ? -1 : 0;
 }
