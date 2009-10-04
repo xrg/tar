@@ -1,6 +1,6 @@
 /* POSIX extended headers for tar.
 
-   Copyright (C) 2003, 2004, 2005, 2006, 2007 Free Software Foundation, Inc.
+   Copyright (C) 2003, 2004, 2005, 2006, 2007, 2009 Free Software Foundation, Inc.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -168,12 +168,12 @@ xheader_set_keyword_equal (char *kw, char *eq)
       global = false;
     }
 
-  while (p > kw && isspace (*p))
+  while (p > kw && isspace ((unsigned char) *p))
     p--;
 
   *p = 0;
 
-  for (p = eq + 1; *p && isspace (*p); p++)
+  for (p = eq + 1; *p && isspace ((unsigned char) *p); p++)
     ;
 
   if (strcmp (kw, "delete") == 0)
@@ -571,8 +571,9 @@ decx (void *data, char const *keyword, char const *value, size_t size)
   if (t)
     t->decoder (st, keyword, value, size);
   else
-    WARN((0, 0, _("Ignoring unknown extended header keyword `%s'"),
-	 keyword));
+    WARNOPT (WARN_UNKNOWN_KEYWORD,
+	     (0, 0, _("Ignoring unknown extended header keyword `%s'"),
+	      keyword));
 }
 
 void

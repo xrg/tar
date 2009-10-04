@@ -189,11 +189,11 @@ update_archive (void)
   output_start = current_block->buffer;
 
   {
-    char *file_name;
-
-    while ((file_name = name_from_list ()) != NULL)
+    struct name const *p;
+    while ((p = name_from_list ()) != NULL)
       {
-	if (excluded_name (file_name,global_excluded))
+	char *file_name = p->name;
+	if (excluded_name (file_name, global_excluded))
 	  continue;
 	if (interactive_option && !confirm ("add", file_name))
 	  continue;

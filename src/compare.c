@@ -1,7 +1,7 @@
 /* Diff files from a tar archive.
 
    Copyright (C) 1988, 1992, 1993, 1994, 1996, 1997, 1999, 2000, 2001,
-   2003, 2004, 2005, 2006, 2007 Free Software Foundation, Inc.
+   2003, 2004, 2005, 2006, 2007, 2009 Free Software Foundation, Inc.
 
    Written by John Gilmore, on 1987-04-30.
 
@@ -66,8 +66,7 @@ report_difference (struct tar_stat_info *st, const char *fmt, ...)
       fprintf (stdlis, "\n");
     }
 
-  if (exit_status == TAREXIT_SUCCESS)
-    exit_status = TAREXIT_DIFFERS;
+  set_exit_status (TAREXIT_DIFFERS);
 }
 
 /* Take a buffer returned by read_and_process and do nothing with it.  */
@@ -380,7 +379,8 @@ diff_dumpdir (void)
   else
     dev = stat_data.st_dev;
 
-  dumpdir_buffer = get_directory_contents (current_stat_info.file_name, dev);
+  dumpdir_buffer = directory_contents
+                    (scan_directory (current_stat_info.file_name, dev, false));
 
   if (dumpdir_buffer)
     {
@@ -609,8 +609,9 @@ verify_volume (void)
 	      status = read_header (false);
 	      if (status == HEADER_ZERO_BLOCK)
 	        break;
-	      WARN ((0, 0, _("A lone zero block at %s"),
-	  	    STRINGIFY_BIGINT (current_block_ordinal (), buf)));
+	      WARNOPT (WARN_ALONE_ZERO_BLOCK,
+		       (0, 0, _("A lone zero block at %s"),
+			STRINGIFY_BIGINT (current_block_ordinal (), buf)));
             }
 	}
       

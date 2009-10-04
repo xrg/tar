@@ -1,7 +1,7 @@
 # Process this file with autom4te to create testsuite. -*- Autotest -*-
 
 # Test suite for GNU tar.
-# Copyright (C) 2006, 2007 Free Software Foundation, Inc.
+# Copyright (C) 2009 Free Software Foundation, Inc.
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -14,26 +14,34 @@
 # GNU General Public License for more details.
 
 # You should have received a copy of the GNU General Public License
-# along with this program; if not, write to the Free Software
-# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
-# 02110-1301, USA.
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-# Tar should exit with error code 1 (file differs) if any files have
-# changed during archiving.
-
-AT_SETUP([grow])
-AT_KEYWORDS([grow filechange])
+AT_SETUP([incremental dumps with -C])
+AT_KEYWORDS([incremental incr05])
 
 AT_TAR_CHECK([
-genfile --file foo --length 50000k
-genfile --file baz
-genfile --run --checkpoint 10 --length 1024 --append foo -- tar --checkpoint -vcf bar foo baz
+mkdir dir
+mkdir dir/sub
+genfile --file dir/file1
+genfile --file dir/sub/file2
+
+echo Level 0
+tar -c -f archive.tar -g db -C dir -v --warning=no-new-dir .
+
+genfile --file dir/file3
+echo Level 1
+tar -c -f archive.tar -g db -C dir -v --warning=no-new-dir .
 ],
-[1],
-[foo
-baz
-],
-[tar: foo: file changed as we read it
-])
+[0],
+[Level 0
+./
+./sub/
+./file1
+./sub/file2
+Level 1
+./
+./sub/
+./file3
+],[],[],[],[gnu, oldgnu, posix])
 
 AT_CLEANUP

@@ -4,7 +4,10 @@
 alloca
 argmatch
 argp
+argp-version-etc
+asprintf
 backupfile
+canonicalize
 closeout
 configmake
 dirname
@@ -18,7 +21,7 @@ ftruncate
 full-write
 getdate
 getline
-getopt
+getopt-gnu
 getpagesize
 gettext
 gettime
@@ -31,6 +34,8 @@ localcharset
 mkdtemp
 modechange
 obstack
+priv-set
+progname
 quote
 quotearg
 rpmatch

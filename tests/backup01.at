@@ -1,7 +1,7 @@
 # Process this file with autom4te to create testsuite. -*- Autotest -*-
 
 # Test suite for GNU tar.
-# Copyright (C) 2006, 2007 Free Software Foundation, Inc.
+# Copyright (C) 2009 Free Software Foundation, Inc.
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -18,22 +18,32 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 # 02110-1301, USA.
 
-# Tar should exit with error code 1 (file differs) if any files have
-# changed during archiving.
+# Description:
+# When extracting, tar (<1.22) sometimes renamed a backup back to the
+# original name (overwriting the newly-extracted file) for no good reason.
+#
+# Reported by: Carl Worth <cworth@cworth.org>,
+#              Eric Lammerts <eric@lammerts.org>
+#
+# References: <1249419998.4905.84.camel@yoom.home.cworth.org>
+#             http://lists.gnu.org/archive/html/bug-tar/2009-08/msg00005.html
+#             http://bugs.debian.org/cgi-bin/bugreport.cgi?bug=508199
+#
 
-AT_SETUP([grow])
-AT_KEYWORDS([grow filechange])
+AT_SETUP([extracting existing dir with --backup])
+AT_KEYWORDS([extract backup backup01])
 
 AT_TAR_CHECK([
-genfile --file foo --length 50000k
-genfile --file baz
-genfile --run --checkpoint 10 --length 1024 --append foo -- tar --checkpoint -vcf bar foo baz
+mkdir dir1 dir2
+echo bla > dir1/file1
+tar cf test.tar dir1 dir2
+tar xfv test.tar --backup
 ],
-[1],
-[foo
-baz
-],
-[tar: foo: file changed as we read it
+[0],
+[dir1/
+dir1/file1
+Renaming `dir1/file1' to `dir1/file1~'
+dir2/
 ])
 
 AT_CLEANUP

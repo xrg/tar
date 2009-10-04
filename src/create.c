@@ -1,7 +1,7 @@
 /* Create a tar archive.
 
    Copyright (C) 1985, 1992, 1993, 1994, 1996, 1997, 1999, 2000, 2001,
-   2003, 2004, 2005, 2006, 2007 Free Software Foundation, Inc.
+   2003, 2004, 2005, 2006, 2007, 2009 Free Software Foundation, Inc.
 
    Written by John Gilmore, on 1985-08-25.
 
@@ -63,21 +63,22 @@ exclusion_tag_warning (const char *dirname, const char *tagname,
 		       const char *message)
 {
   if (verbose_option)
-    WARN ((0, 0,
-	   _("%s: contains a cache directory tag %s; %s"),
-	   quotearg_colon (dirname),
-	   quotearg_n (1, tagname),
-	   message));
+    WARNOPT (WARN_CACHEDIR,
+	     (0, 0,
+	      _("%s: contains a cache directory tag %s; %s"),
+	      quotearg_colon (dirname),
+	      quotearg_n (1, tagname),
+	      message));
 }
 
 enum exclusion_tag_type 
-check_exclusion_tags (char *dirname, const char **tag_file_name, struct exclude** excl, struct exclude** nexcl)
+check_exclusion_tags (const char *dirname, const char **tag_file_name, struct exclude** excl, struct exclude** nexcl)
 {
   static char *tagname = NULL;
   static size_t tagsize = 0;
   struct exclusion_tag *tag;
   size_t dlen = strlen (dirname);
-  int addslash = dirname[dlen-1] != '/';
+  int addslash = !ISSLASH (dirname[dlen-1]);
   char *nptr = NULL;
   struct exclude* pexcl= NULL;
   if (excl) pexcl= *excl; /* Keep a copy of the original exclude struct */
@@ -1121,14 +1122,15 @@ dump_regular_file (int fd, struct tar_stat_info *st)
 	{
 	  char buf[UINTMAX_STRSIZE_BOUND];
 	  memset (blk->buffer + count, 0, bufsize - count);
-	  WARN ((0, 0,
-		 ngettext ("%s: File shrank by %s byte; padding with zeros",
-			   "%s: File shrank by %s bytes; padding with zeros",
-			   size_left),
-		 quotearg_colon (st->orig_file_name),
-		 STRINGIFY_BIGINT (size_left, buf)));
+	  WARNOPT (WARN_FILE_SHRANK,
+		   (0, 0,
+		    ngettext ("%s: File shrank by %s byte; padding with zeros",
+			      "%s: File shrank by %s bytes; padding with zeros",
+			      size_left),
+		    quotearg_colon (st->orig_file_name),
+		    STRINGIFY_BIGINT (size_left, buf)));
 	  if (! ignore_failed_read_option) 
-	    exit_status = TAREXIT_DIFFERS;
+	    set_exit_status (TAREXIT_DIFFERS);
 	  pad_archive (size_left - (bufsize - count));
 	  return dump_status_short;
 	}
@@ -1139,7 +1141,7 @@ dump_regular_file (int fd, struct tar_stat_info *st)
 
 static void
 dump_dir0 (char *directory,
-	   struct tar_stat_info *st, int top_level, dev_t parent_device, struct exclude *excl)
+	   struct tar_stat_info *st, bool top_level, dev_t parent_device, struct exclude *excl)
 {
   dev_t our_device = st->stat.st_dev;
   const char *tag_file_name;
@@ -1163,11 +1165,12 @@ dump_dir0 (char *directory,
 
       if (!incremental_option)
 	finish_header (st, blk, block_ordinal);
-      else if (gnu_list_name->dir_contents)
+      else if (gnu_list_name->directory)
 	{
 	  if (archive_format == POSIX_FORMAT)
 	    {
-	      xheader_store ("GNU.dumpdir", st, gnu_list_name->dir_contents);
+	      xheader_store ("GNU.dumpdir", st,
+			     safe_directory_contents (gnu_list_name->directory));
 	      finish_header (st, blk, block_ordinal);
 	    }
 	  else
@@ -1179,11 +1182,8 @@ dump_dir0 (char *directory,
 	      const char *buffer, *p_buffer;
 
 	      block_ordinal = current_block_ordinal ();
-	      buffer = gnu_list_name->dir_contents;
-	      if (buffer)
-		totsize = dumpdir_size (buffer);
-	      else
-		totsize = 0;
+	      buffer = safe_directory_contents (gnu_list_name->directory);
+	      totsize = dumpdir_size (buffer);
 	      OFF_TO_CHARS (totsize, blk->header.size);
 	      finish_header (st, blk, block_ordinal);
 	      p_buffer = buffer;
@@ -1222,9 +1222,10 @@ dump_dir0 (char *directory,
       && parent_device != st->stat.st_dev)
     {
       if (verbose_option)
-	WARN ((0, 0,
-	       _("%s: file is on a different filesystem; not dumped"),
-	       quotearg_colon (st->orig_file_name)));
+	WARNOPT (WARN_XDEV,
+		 (0, 0,
+		  _("%s: file is on a different filesystem; not dumped"),
+		  quotearg_colon (st->orig_file_name)));
     }
   else
     {
@@ -1262,7 +1263,7 @@ dump_dir0 (char *directory,
 		  }
 		strcpy (name_buf + name_len, entry);
 		if (!excluded_name (name_buf,excludes))
-		  dump_file (name_buf, 0, our_device,nexcludes);
+		  dump_file (name_buf, false, our_device,nexcludes);
 	      }
 	    
 	    free (name_buf);
@@ -1276,7 +1277,7 @@ dump_dir0 (char *directory,
 	  name_buf = xmalloc (name_size);
 	  strcpy (name_buf, st->orig_file_name);
 	  strcat (name_buf, tag_file_name);
-	  dump_file (name_buf, 0, our_device,excludes);
+	  dump_file (name_buf, false, our_device,excludes);
 	  free (name_buf);
 	  break;
       
@@ -1306,7 +1307,8 @@ ensure_slash (char **pstr)
 }
 
 static bool
-dump_dir (int fd, struct tar_stat_info *st, int top_level, dev_t parent_device, struct exclude * excl)
+dump_dir (int fd, struct tar_stat_info *st, bool top_level, 
+          dev_t parent_device, struct exclude * excl)
 {
   char *directory = fdsavedir (fd);
   if (!directory)
@@ -1327,7 +1329,7 @@ dump_dir (int fd, struct tar_stat_info *st, int top_level, dev_t parent_device, 
 void
 create_archive (void)
 {
-  const char *p;
+  struct name const *p;
   struct exclude* excluded = global_excluded;
 
   open_archive (ACCESS_WRITE);
@@ -1342,24 +1344,24 @@ create_archive (void)
       collect_and_sort_names ();
 
       while ((p = name_from_list ()) != NULL)
-	if (!excluded_name (p,excluded))
-	  dump_file (p, -1, (dev_t) 0,excluded);
+	if (!excluded_name (p->name,excluded))
+	  dump_file (p->name, p->cmdline, (dev_t) 0,excluded);
 
       blank_name_list ();
       while ((p = name_from_list ()) != NULL)
-	if (!excluded_name (p,excluded))
+	if (!excluded_name (p->name,excluded))
 	  {
-	    size_t plen = strlen (p);
+	    size_t plen = strlen (p->name);
 	    if (buffer_size <= plen)
 	      {
 		while ((buffer_size *= 2) <= plen)
 		  continue;
 		buffer = xrealloc (buffer, buffer_size);
 	      }
-	    memcpy (buffer, p, plen);
+	    memcpy (buffer, p->name, plen);
 	    if (! ISSLASH (buffer[plen - 1]))
-	      buffer[plen++] = '/';
-	    q = gnu_list_name->dir_contents;
+	      buffer[plen++] = DIRECTORY_SEPARATOR;
+	    q = directory_contents (gnu_list_name->directory);
 	    if (q)
 	      while (*q)
 		{
@@ -1373,7 +1375,7 @@ create_archive (void)
 			  buffer = xrealloc (buffer, buffer_size);
  			}
 		      strcpy (buffer + plen, q + 1);
-		      dump_file (buffer, -1, (dev_t) 0,excluded);
+		      dump_file (buffer, false, (dev_t) 0,excluded);
 		    }
 		  q += qlen + 1;
 		}
@@ -1382,9 +1384,10 @@ create_archive (void)
     }
   else
     {
-      while ((p = name_next (1)) != NULL)
-	if (!excluded_name (p,excluded))
-	  dump_file (p, 1, (dev_t) 0,excluded);
+      const char *name;
+      while ((name = name_next (1)) != NULL)
+	if (!excluded_name (name, excluded))
+	  dump_file (name, true, (dev_t) 0, excluded);
     }
 
   write_eot ();
@@ -1416,10 +1419,11 @@ compare_links (void const *entry1, void const *entry2)
 static void
 unknown_file_error (char const *p)
 {
-  WARN ((0, 0, _("%s: Unknown file type; file ignored"),
-	 quotearg_colon (p)));
+  WARNOPT (WARN_FILE_IGNORED,
+	   (0, 0, _("%s: Unknown file type; file ignored"),
+	    quotearg_colon (p)));
   if (!ignore_failed_read_option)
-    exit_status = TAREXIT_FAILURE;
+    set_exit_status (TAREXIT_FAILURE);
 }
 
 
@@ -1435,7 +1439,7 @@ static Hash_table *link_table;
 static bool
 dump_hard_link (struct tar_stat_info *st)
 {
-  if (link_table && st->stat.st_nlink > 1)
+  if (link_table && (st->stat.st_nlink > 1 || remove_files_option))
     {
       struct link lp;
       struct link *duplicate;
@@ -1485,19 +1489,26 @@ file_count_links (struct tar_stat_info *st)
   if (st->stat.st_nlink > 1)
     {
       struct link *duplicate;
-      struct link *lp = xmalloc (offsetof (struct link, name)
-				 + strlen (st->orig_file_name) + 1);
+      char *linkname = NULL;
+      struct link *lp;
+
+      assign_string (&linkname, st->orig_file_name);
+      transform_name (&linkname, XFORM_LINK);
+      
+      lp = xmalloc (offsetof (struct link, name)
+				 + strlen (linkname) + 1);
       lp->ino = st->stat.st_ino;
       lp->dev = st->stat.st_dev;
       lp->nlink = st->stat.st_nlink;
-      strcpy (lp->name, st->orig_file_name);
-
+      strcpy (lp->name, linkname);
+      free (linkname);
+      
       if (! ((link_table
 	      || (link_table = hash_initialize (0, 0, hash_link,
 						compare_links, 0)))
 	     && (duplicate = hash_insert (link_table, lp))))
 	xalloc_die ();
-
+      
       if (duplicate != lp)
 	abort ();
       lp->nlink--;
@@ -1519,11 +1530,10 @@ check_links (void)
     {
       if (lp->nlink)
 	{
-	  WARN ((0, 0, _("Missing links to %s.\n"), quote (lp->name)));
+	  WARN ((0, 0, _("Missing links to %s."), quote (lp->name)));
 	}
     }
 }
-
 
 /* Dump a single file, recursing on directories.  P is the file name
    to dump.  TOP_LEVEL tells whether this is a top-level call; zero
@@ -1536,7 +1546,7 @@ check_links (void)
 
 static void
 dump_file0 (struct tar_stat_info *st, const char *p,
-	    int top_level, dev_t parent_device, struct exclude* excluded)
+	    bool top_level, dev_t parent_device, struct exclude* excluded)
 {
   union block *header;
   char type;
@@ -1557,7 +1567,7 @@ dump_file0 (struct tar_stat_info *st, const char *p,
 
   if (deref_stat (dereference_option, p, &st->stat) != 0)
     {
-      stat_diag (p);
+      file_removed_diag (p, top_level, stat_diag);
       return;
     }
   st->archive_file_size = original_size = st->stat.st_size;
@@ -1580,26 +1590,28 @@ dump_file0 (struct tar_stat_info *st, const char *p,
 
   /* See if we want only new files, and check if this one is too old to
      put in the archive.
-
+     
      This check is omitted if incremental_option is set *and* the
      requested file is not explicitely listed in the command line. */
-
+  
   if (!(incremental_option && !is_individual_file (p))
       && !S_ISDIR (st->stat.st_mode)
       && OLDER_TAR_STAT_TIME (*st, m)
       && (!after_date_option || OLDER_TAR_STAT_TIME (*st, c)))
     {
       if (!incremental_option && verbose_option)
-	WARN ((0, 0, _("%s: file is unchanged; not dumped"),
-	       quotearg_colon (p)));
+	WARNOPT (WARN_FILE_UNCHANGED,
+		 (0, 0, _("%s: file is unchanged; not dumped"),
+		  quotearg_colon (p)));
       return;
     }
 
   /* See if we are trying to dump the archive.  */
   if (sys_file_is_archive (st))
     {
-      WARN ((0, 0, _("%s: file is the archive; not dumped"),
-	     quotearg_colon (p)));
+      WARNOPT (WARN_IGNORE_ARCHIVE,
+	       (0, 0, _("%s: file is the archive; not dumped"),
+		quotearg_colon (p)));
       return;
     }
 
@@ -1627,11 +1639,7 @@ dump_file0 (struct tar_stat_info *st, const char *p,
 			 : 0)));
 	  if (fd < 0)
 	    {
-	      if (!top_level && errno == ENOENT)
-		WARN ((0, 0, _("%s: File removed before we read it"),
-		       quotearg_colon (p)));
-	      else
-		open_diag (p);
+	      file_removed_diag (p, top_level, open_diag);
 	      return;
 	    }
 	}
@@ -1701,7 +1709,7 @@ dump_file0 (struct tar_stat_info *st, const char *p,
 	       : fstat (fd, &final_stat))
 	      != 0)
 	    {
-	      stat_diag (p);
+	      file_removed_diag (p, top_level, stat_diag);
 	      ok = false;
 	    }
 	}
@@ -1714,10 +1722,10 @@ dump_file0 (struct tar_stat_info *st, const char *p,
 	       && !(remove_files_option && is_dir))
 	      || original_size < final_stat.st_size)
 	    {
-	      WARN ((0, 0, _("%s: file changed as we read it"),
-		     quotearg_colon (p)));
-	      if (exit_status == TAREXIT_SUCCESS)
-		exit_status = TAREXIT_DIFFERS;
+	      WARNOPT (WARN_FILE_CHANGED,
+		       (0, 0, _("%s: file changed as we read it"),
+			quotearg_colon (p)));
+	      set_exit_status (TAREXIT_DIFFERS);
 	    }
 	  else if (atime_preserve_option == replace_atime_preserve
 		   && set_file_atime (fd, p, restore_times) != 0)
@@ -1758,7 +1766,7 @@ dump_file0 (struct tar_stat_info *st, const char *p,
       size = readlink (p, buffer, linklen + 1);
       if (size < 0)
 	{
-	  readlink_diag (p);
+	  file_removed_diag (p, top_level, readlink_diag);
 	  return;
 	}
       buffer[size] = '\0';
@@ -1794,12 +1802,14 @@ dump_file0 (struct tar_stat_info *st, const char *p,
     type = FIFOTYPE;
   else if (S_ISSOCK (st->stat.st_mode))
     {
-      WARN ((0, 0, _("%s: socket ignored"), quotearg_colon (p)));
+      WARNOPT (WARN_FILE_IGNORED,
+	       (0, 0, _("%s: socket ignored"), quotearg_colon (p)));
       return;
     }
   else if (S_ISDOOR (st->stat.st_mode))
     {
-      WARN ((0, 0, _("%s: door ignored"), quotearg_colon (p)));
+      WARNOPT (WARN_FILE_IGNORED,
+	       (0, 0, _("%s: door ignored"), quotearg_colon (p)));
       return;
     }
   else
@@ -1838,7 +1848,7 @@ dump_file0 (struct tar_stat_info *st, const char *p,
 }
 
 void
-dump_file (const char *p, int top_level, dev_t parent_device, struct exclude* excluded)
+dump_file (const char *p, bool top_level, dev_t parent_device, struct exclude* excluded)
 {
   struct tar_stat_info st;
   tar_stat_init (&st);

@@ -52,6 +52,7 @@ TESTSUITE_AT = \
  append.at\
  append01.at\
  append02.at\
+ backup01.at\
  chtype.at\
  comprec.at\
  delete01.at\
@@ -60,6 +61,11 @@ TESTSUITE_AT = \
  delete04.at\
  delete05.at\
  exclude.at\
+ exclude01.at\
+ exclude02.at\
+ exclude03.at\
+ exclude04.at\
+ exclude05.at\
  extrac01.at\
  extrac02.at\
  extrac03.at\
@@ -67,6 +73,9 @@ TESTSUITE_AT = \
  extrac05.at\
  extrac06.at\
  extrac07.at\
+ extrac08.at\
+ filerem01.at\
+ filerem02.at\
  gzip.at\
  grow.at\
  incremental.at\
@@ -74,9 +83,13 @@ TESTSUITE_AT = \
  incr02.at\
  incr03.at\
  incr04.at\
+ incr05.at\
+ incr06.at\
  indexfile.at\
  ignfail.at\
  link01.at\
+ link02.at\
+ link03.at\
  listed01.at\
  listed02.at\
  long01.at\
@@ -119,6 +132,7 @@ TESTSUITE_AT = \
  volume.at\
  verbose.at\
  version.at\
+ xform-h.at\
  star/gtarfail.at\
  star/gtarfail2.at\
  star/multi-fail.at\
@@ -140,7 +154,7 @@ clean-local:
 	test ! -f $(TESTSUITE) || $(SHELL) $(TESTSUITE) --clean
 
 check-local: atconfig atlocal $(TESTSUITE)
-	$(SHELL) $(TESTSUITE)
+	$(SHELL) $(TESTSUITE) $(TESTSUITEFLAGS)
 
 check-full:
 	FULL_TEST=1 $(MAKE) check
@@ -149,7 +163,7 @@ check-full:
 
 # Run the test suite on the *installed* tree.
 installcheck-local:
-	$(SHELL) $(TESTSUITE) AUTOTEST_PATH=$(exec_prefix)/bin
+	$(SHELL) $(TESTSUITE) $(TESTSUITEFLAGS) AUTOTEST_PATH=$(exec_prefix)/bin
 
 
 ## ------------ ##

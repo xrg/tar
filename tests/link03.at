@@ -1,7 +1,7 @@
 # Process this file with autom4te to create testsuite. -*- Autotest -*-
 
 # Test suite for GNU tar.
-# Copyright (C) 2006, 2007 Free Software Foundation, Inc.
+# Copyright (C) 2009 Free Software Foundation, Inc.
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -18,22 +18,39 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 # 02110-1301, USA.
 
-# Tar should exit with error code 1 (file differs) if any files have
-# changed during archiving.
+# Make sure -l option works correctly in conjunction with --remove-files
+# See also link02.at
 
-AT_SETUP([grow])
-AT_KEYWORDS([grow filechange])
+AT_SETUP([working -l with --remove-files])
+AT_KEYWORDS([hardlinks link03])
+
+m4_define([create_files],[
+genfile -l 64 -f file1
+link file1 file2
+link file2 file3
+link file3 file4
+])
 
 AT_TAR_CHECK([
-genfile --file foo --length 50000k
-genfile --file baz
-genfile --run --checkpoint 10 --length 1024 --append foo -- tar --checkpoint -vcf bar foo baz
+create_files
+echo archive.1
+tar -c -f archive.1 -l --remove-files file1 file2 file3 file4
+create_files
+echo archive.2
+tar -c -f archive.2 -l --remove-files file1 file2 file3
+echo testing archive.2
+tar tfv archive.2 | sed -n 's/.*file[[2-3]] link to //p'
 ],
-[1],
-[foo
-baz
+[0],
+[archive.1
+archive.2
+testing archive.2
+file1
+file1
 ],
-[tar: foo: file changed as we read it
+[tar: Missing links to `file1'.
 ])
 
 AT_CLEANUP
+
+
