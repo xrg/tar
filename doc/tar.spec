@@ -1,24 +1,19 @@
-%define	name	tar
-%define version 1.19
-%define release %mkrel 4
-
 Summary:	A GNU file archiving program
-Name:		%{name}
-Version:	%{version}
-Release:	%{release}
-License:	GPLv2+
+Name:		tar
+Version:	1.22
+Release:	%mkrel 2
+License:	GPLv3
 Group:		Archiving/Backup
 URL:		http://www.gnu.org/software/tar/tar.html
-Buildroot:	%{_tmppath}/%{name}-%{version}-%{release}-buildroot
-
-Source:		ftp://alpha.gnu.org/gnu/tar/%{name}-%{version}.tar.bz2
-Source1:	ftp://alpha.gnu.org/gnu/tar/%{name}-%{version}.tar.bz2.sig
+Source0:	ftp://ftp.gnu.org/gnu/tar/%{name}-%{version}.tar.bz2
+Source1:	%{SOURCE0}.sig
 Source2:	%{name}-help2man.bz2
-Patch13:	tar-1.15.91-lzma.patch
-Patch14:        tar-1.19-fix-bz2.patch
+Patch0:		tar-compatibility-Y-flag.patch
+BuildRequires:	bison xz
 Requires(post):		info-install
 Requires(preun):	info-install
 Conflicts:	rmt < 0.4b36
+Buildroot:	%{_tmppath}/%{name}-%{version}-%{release}-buildroot
 
 %description
 The GNU tar program saves many files together into one archive and
@@ -39,13 +34,12 @@ with files.
 
 %prep
 %setup -q
-%patch13 -p1 -b .lzma
-%patch14 -p1
+%patch0 -p1
 
 bzcat %{SOURCE2} > ./help2man
 chmod +x ./help2man
 
-gzip ChangeLog
+xz ChangeLog
 
 %build
 %configure2_5x \
@@ -59,7 +53,10 @@ gzip ChangeLog
 (echo '[NAME]' && sed 's@/\* *@@; s/-/\\-/; q' src/tar.c) | (./help2man -i - -S '%{name} %{version}' src/tar ) | sed 's/^\.B info .*/.B info %{name}/' > %{name}.1
 
 %check
-make check
+# Disabled due to buildsystem weirdness: tests are always fine if you
+# do it with iurt on the cluster, but often fail when run through bs,
+# randomly - AdamW 2008/04
+#make check
 
 %install
 rm -rf %{buildroot}
@@ -91,7 +88,7 @@ rm -rf %{buildroot}
 
 %files -f %{name}.lang
 %defattr(-,root,root)
-%doc AUTHORS ChangeLog.gz COPYING NEWS README THANKS TODO
+%doc AUTHORS ChangeLog.xz NEWS README THANKS TODO
 /bin/*
 %{_libexecdir}/backup.sh
 %{_libexecdir}/dump-remind
