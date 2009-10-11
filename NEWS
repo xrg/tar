@@ -1,5 +1,164 @@
-GNU tar NEWS - User visible changes. 2007-10-10
+GNU tar NEWS - User visible changes. 2009-03-05
 Please send GNU tar bug reports to <bug-tar@gnu.org>
+
+
+version 1.22 - Sergey Poznyakoff, 2009-03-05
+
+* Support for xz compression
+
+Tar uses xz for compression if one of the following conditions is met: 
+
+ 1. The option --xz or -J (see below) is used.
+ 2. The xz binary is set as compressor using --use-compress-program option.
+ 3. The file name of the archive being created ends in `.xz' and
+ auto-compress option (-a) is used.
+
+Xz is used for decompression if one of the following conditions is met: 
+
+ 1. The option --xz or -J is used.
+ 2. The xz binary is set as compressor using --use-compress-program option.
+ 3. The file is recognized as xz compressed stream data.
+
+* Short option -J reassigned as a short equivalent of --xz
+
+* New option -I
+
+The -I option is assigned as a short equivalent for
+--use-compress-program.
+
+* The --no-recursive option works in incremental mode.
+
+
+version 1.21 - Sergey Poznyakoff, 2008-12-27
+
+* New short option -J
+
+A shortcut for --lzma.
+
+* New option --lzop
+
+* New option --no-auto-compress
+
+Cancels the effect of previous --auto-compress (-a) option.
+
+* New option --no-null
+
+Cancels the effect of previous --null option.
+
+* Compressed format recognition
+
+If tar is unable to determine archive compression format, it falls
+back to using archive suffix to determine it.
+
+* VCS support.
+
+Using --exclude-vcs handles also files used internally by Bazaar,
+Mercurial and Darcs.
+
+* Transformation scope flags
+
+Name transformation expressions understand additional flags that
+control type of archive members affected by them.  The flags are:
+
+ - r
+   Apply transformation to regular archive members.
+
+ - s
+   Apply transformation to symbolic link targets.
+
+ - h  
+   Apply transformation to hard link targets.
+
+Corresponding upper-case letters negate the meaning, so that
+`H' means ``do not apply transformation to hard link targets.''
+
+The scope flags are listed in the third part of an `s' expression,
+e.g.:
+
+   tar --transform 's|^|/usr/local/|S'
+
+Default is `rsh', which means that transformations are applied to
+both regular archive members and to the targets of symbolic and hard
+links.  If several transform expressions are used, the default flags
+can be changed using `flags=' statement before the expressions, e.g.:
+
+   tar --transform 'flags=S;s|^|/usr/local/|S'
+
+* Bugfixes
+
+** The --null option disabled handling of tar options in list files.  This
+is fixed.
+** Fixed record size autodetection.  If detected record size differs from
+the expected value (either default, or set on the command line), tar
+always prints a warning if verbosity level is set to 1 or greater,
+i.e. if either -t or -v option is given.
+
+
+
+version 1.20 - Sergey Poznyakoff, 2008-04-14
+
+* New option --auto-compress (-a)
+
+With --create, selects compression algorithm basing on the suffix
+of the archive file name.
+
+* New option --lzma
+
+Selects LZMA compression algorithm
+
+* New option --hard-dereference
+
+During archive creation, dereferences hard links and stores the files
+they refer to, instead of creating usual hard link members (type '1').
+
+* New option --checkpoint-action
+
+This action allows to specify an action to be executed upon hitting a
+checkpoint.  Recognized actions are: dot, echo (the default),
+echo=string, ttyout=string, exec=cmdline, and sleep=value.  Any number
+of `--checkpoint-action' options can be specified, the actions will be
+executed in order of their appearance in the command line.  See
+chapter 3.8 "Checkpoints" for a complete description.
+
+* New options --no-check-device, --check-device.
+
+The `--no-check-device' option disables comparing device numbers during
+preparatory stage of an incremental dump.  This allows to avoid
+creating full dumps if the device numbers change (e.g. when using an
+LVM snapshot).
+
+The `--check-device' option enables comparing device numbers.  This is
+the default.  This option is provided to undo the effect of the previous
+`--no-check-device' option, e.g. if it was set in TAR_OPTIONS
+environment variable.
+
+* The --transform option.
+
+Any number of `--transform' options can be given in the command line.
+The specified transformations will be applied in turn.
+
+The argument to `--transform' option can be a list of replace
+expressions, separated by a semicolon (as in `sed').
+
+Filename transformations are applied to symbolic link targets
+during both creation and extraction.  Tar 1.19 used them only
+during extraction.
+
+For a detailed description, see chapter 6.7 "Modifying File and Member
+Names". 
+
+* Info (end-of-volume) scripts
+
+The value of the blocking factor is made available to info and
+checkpoint scripts via environment variable TAR_BLOCKING_FACTOR.
+
+* Incremental archives
+
+Improved (sped up) extracting from incremental archives.
+
+* Bugfixes.
+** Fix bug introduced in version 1.19: tar refused to update non-existing
+archives.
 
 
 version 1.19 - Sergey Poznyakoff, 2007-10-10
@@ -932,7 +1091,7 @@ Versions 1.07 back to 1.00 by Jay Fenlason.
 
 
 Copyright (C) 1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2003,
-2004, 2005, 2006, 2007 Free Software Foundation, Inc.
+2004, 2005, 2006, 2007, 2008 Free Software Foundation, Inc.
 
 This file is part of GNU tar.
 

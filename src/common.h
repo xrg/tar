@@ -1,7 +1,7 @@
 /* Common declarations for the tar program.
 
    Copyright (C) 1988, 1992, 1993, 1994, 1996, 1997, 1999, 2000, 2001,
-   2003, 2004, 2005, 2006, 2007 Free Software Foundation, Inc.
+   2003, 2004, 2005, 2006, 2007, 2008 Free Software Foundation, Inc.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -93,9 +93,6 @@ GLOBAL enum subcommand subcommand_option;
 /* Selected format for output archive.  */
 GLOBAL enum archive_format archive_format;
 
-/* Either NL or NUL, as decided by the --null option.  */
-GLOBAL char filename_terminator;
-
 /* Size of each record, once in blocks, once in bytes.  Those two variables
    are always related, the second being BLOCKSIZE times the first.  They do
    not have _option in their name, even if their values is derived from
@@ -130,19 +127,13 @@ GLOBAL enum backup_type backup_type;
 GLOBAL bool block_number_option;
 
 GLOBAL unsigned checkpoint_option;
-
-enum checkpoint_style
-  {
-    checkpoint_text,
-    checkpoint_dot
-  };
-
-GLOBAL enum checkpoint_style checkpoint_style;
+#define DEFAULT_CHECKPOINT 10
 
 /* Specified name of compression program, or "gzip" as implied by -z.  */
 GLOBAL const char *use_compress_program_option;
 
 GLOBAL bool dereference_option;
+GLOBAL bool hard_dereference_option;
 
 /* Print a message if not all links are dumped */
 GLOBAL int check_links_option;
@@ -194,6 +185,8 @@ GLOBAL enum old_files old_files_option;
 
 /* Specified file name for incremental list.  */
 GLOBAL const char *listed_incremental_option;
+/* Check device numbers when doing incremental dumps. */
+GLOBAL bool check_device_option;
 
 /* Specified mode change string.  */
 GLOBAL struct mode_change *mode_option;
@@ -493,8 +486,18 @@ bool rename_directory (char *src, char *dst);
 void delete_archive_members (void);
 
 /* Module incremen.c.  */
+typedef struct dumpdir *dumpdir_t;
+typedef struct dumpdir_iter *dumpdir_iter_t;
 
-char *get_directory_contents (char *dir_name, dev_t device);
+dumpdir_t dumpdir_create0 (const char *contents, const char *cmask);
+dumpdir_t dumpdir_create (const char *contents);
+void dumpdir_free (dumpdir_t);
+char *dumpdir_locate (dumpdir_t dump, const char *name);
+char *dumpdir_next (dumpdir_iter_t itr);
+char *dumpdir_first (dumpdir_t dump, int all, dumpdir_iter_t *pitr);
+
+
+const char *get_directory_contents (char *dir_name, dev_t device);
 const char *append_incremental_renames (const char *dump);
 void read_directory_file (void);
 void write_directory_file (void);
@@ -696,8 +699,7 @@ char *xheader_format_name (struct tar_stat_info *st, const char *fmt,
 
 void sys_detect_dev_null_output (void);
 void sys_save_archive_dev_ino (void);
-void sys_drain_input_pipe (void);
-void sys_wait_for_child (pid_t);
+void sys_wait_for_child (pid_t, bool);
 void sys_spawn_shell (void);
 bool sys_compare_uid (struct stat *a, struct stat *b);
 bool sys_compare_gid (struct stat *a, struct stat *b);
@@ -711,6 +713,9 @@ bool sys_get_archive_stat (void);
 int sys_exec_command (char *file_name, int typechar, struct tar_stat_info *st);
 void sys_wait_command (void);
 int sys_exec_info_script (const char **archive_name, int volume_number);
+void sys_exec_checkpoint_script (const char *script_name,
+				 const char *archive_name,
+				 int checkpoint_number);
 
 /* Module compare.c */
 void report_difference (struct tar_stat_info *st, const char *message, ...);
@@ -729,14 +734,21 @@ bool string_ascii_p (const char *str);
 bool utf8_convert (bool to_utf, char const *input, char **output);
 
 /* Module transform.c */
-typedef enum
-  {
-    xform_regfile,
-    xform_link,
-    xform_symlink
-  } xform_type;
+#define XFORM_REGFILE  0x01
+#define XFORM_LINK     0x02
+#define XFORM_SYMLINK  0x04
+#define XFORM_ALL      (XFORM_REGFILE|XFORM_LINK|XFORM_SYMLINK)
 
 void set_transform_expr (const char *expr);
-bool transform_name (char **pinput);
-bool transform_member_name (char **pinput, xform_type type);
-bool transform_name_fp (char **pinput, char *(*fun)(char *, void *), void *);
+bool transform_name (char **pinput, int type);
+bool transform_member_name (char **pinput, int type);
+bool transform_name_fp (char **pinput, int type,
+			char *(*fun)(char *, void *), void *);
+
+/* Module suffix.c */
+void set_comression_program_by_suffix (const char *name, const char *defprog);
+
+/* Module checkpoint.c */
+void checkpoint_compile_action (const char *str);
+void checkpoint_finish_compile (void);
+void checkpoint_run (bool do_write);

@@ -1041,7 +1041,7 @@ dump_regular_file (int fd, struct tar_stat_info *st)
   while (size_left > 0)
     {
       size_t bufsize, count;
-
+      
       mv_size_left (size_left);
 
       blk = find_next_block ();
@@ -1422,6 +1422,8 @@ dump_hard_link (struct tar_stat_info *st)
 static void
 file_count_links (struct tar_stat_info *st)
 {
+  if (hard_dereference_option)
+    return;
   if (st->stat.st_nlink > 1)
     {
       struct link *duplicate;
@@ -1493,7 +1495,7 @@ dump_file0 (struct tar_stat_info *st, const char *p,
   assign_string (&st->file_name,
                  safer_name_suffix (p, false, absolute_names_option));
 
-  transform_name (&st->file_name);
+  transform_name (&st->file_name, XFORM_REGFILE);
 
   if (deref_stat (dereference_option, p, &st->stat) != 0)
     {
@@ -1614,6 +1616,7 @@ dump_file0 (struct tar_stat_info *st, const char *p,
 	    case dump_status_ok:
 	    case dump_status_short:
 	      mv_end ();
+	      file_count_links (st);
 	      break;
 
 	    case dump_status_fail:
@@ -1622,8 +1625,6 @@ dump_file0 (struct tar_stat_info *st, const char *p,
 	    case dump_status_not_implemented:
 	      abort ();
 	    }
-
-	  file_count_links (st);
 
 	  ok = status == dump_status_ok;
 	}
@@ -1704,6 +1705,7 @@ dump_file0 (struct tar_stat_info *st, const char *p,
 	}
       buffer[size] = '\0';
       assign_string (&st->link_name, buffer);
+      transform_name (&st->link_name, XFORM_SYMLINK);
       if (NAME_FIELD_SIZE - (archive_format == OLDGNU_FORMAT) < size)
 	write_long_link (st);
 
@@ -1712,7 +1714,7 @@ dump_file0 (struct tar_stat_info *st, const char *p,
       header = start_header (st);
       if (!header)
 	return;
-      tar_copy_str (header->header.linkname, buffer, NAME_FIELD_SIZE);
+      tar_copy_str (header->header.linkname, st->link_name, NAME_FIELD_SIZE);
       header->header.typeflag = SYMTYPE;
       finish_header (st, header, block_ordinal);
       /* nothing more to do to it */

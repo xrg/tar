@@ -1,7 +1,7 @@
 /* GNU dump extensions to tar.
 
    Copyright (C) 1988, 1992, 1993, 1994, 1996, 1997, 1999, 2000, 2001,
-   2003, 2004, 2005, 2006, 2007 Free Software Foundation, Inc.
+   2003, 2004, 2005, 2006, 2007, 2008 Free Software Foundation, Inc.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -49,14 +49,23 @@ enum children
 #define DIR_SET_FLAG(d,f) (d)->flags |= (f)
 #define DIR_CLEAR_FLAG(d,f) (d)->flags &= ~(f)
 
+struct dumpdir                 /* Dump directory listing */
+{
+  char *contents;              /* Actual contents */
+  size_t total;                /* Total number of elements */
+  size_t elc;                  /* Number of D/N/Y elements. */
+  char **elv;                  /* Array of D/N/Y elements */
+};
+
 /* Directory attributes.  */
 struct directory
   {
+    struct directory *next;
     struct timespec mtime;      /* Modification time */
     dev_t device_number;	/* device number for directory */
     ino_t inode_number;		/* inode number for directory */
-    char *contents;             /* Directory contents */
-    char *icontents;            /* Initial contents if the directory was
+    struct dumpdir *dump;       /* Directory contents */
+    struct dumpdir *idump;      /* Initial contents if the directory was
 				   rescanned */
     enum children children;     /* What to save under this directory */
     unsigned flags;             /* See DIRF_ macros above */
@@ -64,9 +73,132 @@ struct directory
 				   the original directory structure */
     const char *tagfile;        /* Tag file, if the directory falls under
 				   exclusion_tag_under */
-    char name[1];		/* file name of directory */
+    char *name;	     	        /* file name of directory */
   };
 
+struct dumpdir *
+dumpdir_create0 (const char *contents, const char *cmask)
+{
+  struct dumpdir *dump;
+  size_t i, total, ctsize, len;
+  char *p;
+  const char *q;
+  
+  for (i = 0, total = 0, ctsize = 1, q = contents; *q; total++, q += len)
+    {
+      len = strlen (q) + 1;
+      ctsize += len;
+      if (!cmask || strchr (cmask, *q))
+	i++;
+    }
+  dump = xmalloc (sizeof (*dump) + ctsize);
+  dump->contents = (char*)(dump + 1);
+  memcpy (dump->contents, contents, ctsize);
+  dump->total = total;
+  dump->elc = i;
+  dump->elv = xcalloc (i + 1, sizeof (dump->elv[0]));
+
+  for (i = 0, p = dump->contents; *p; p += strlen (p) + 1)
+    {
+      if (!cmask || strchr (cmask, *p))
+	dump->elv[i++] = p + 1;
+    }
+  dump->elv[i] = NULL;
+  return dump;
+}
+
+struct dumpdir *
+dumpdir_create (const char *contents)
+{
+  return dumpdir_create0 (contents, "YND");
+}
+
+void
+dumpdir_free (struct dumpdir *dump)
+{
+  free (dump->elv);
+  free (dump);
+}
+
+static int
+compare_dirnames (const void *first, const void *second)
+{
+  char const *const *name1 = first;
+  char const *const *name2 = second;
+  return strcmp (*name1, *name2);
+}
+
+/* Locate NAME in the dumpdir array DUMP.
+   Return pointer to the slot in DUMP->contents, or NULL if not found */
+char *
+dumpdir_locate (struct dumpdir *dump, const char *name)
+{
+  char **ptr;
+  if (!dump)
+    return NULL;
+
+  ptr = bsearch (&name, dump->elv, dump->elc, sizeof (dump->elv[0]),
+		 compare_dirnames);
+  return ptr ? *ptr - 1: NULL;
+}
+
+struct dumpdir_iter
+{
+  struct dumpdir *dump; /* Dumpdir being iterated */
+  int all;              /* Iterate over all entries, not only D/N/Y */ 
+  size_t next;          /* Index of the next element */
+};
+
+char *
+dumpdir_next (struct dumpdir_iter *itr)
+{
+  size_t cur = itr->next;
+  char *ret = NULL;
+  
+  if (itr->all)
+    {
+      ret = itr->dump->contents + cur;
+      if (*ret == 0)
+	return NULL;
+      itr->next += strlen (ret) + 1;
+    }
+  else if (cur < itr->dump->elc)
+    {
+      ret = itr->dump->elv[cur] - 1;
+      itr->next++;
+    }
+
+  return ret;
+}
+
+char *
+dumpdir_first (struct dumpdir *dump, int all, struct dumpdir_iter **pitr)
+{
+  struct dumpdir_iter *itr = xmalloc (sizeof (*itr));
+  itr->dump = dump;
+  itr->all = all;
+  itr->next = 0;
+  *pitr = itr;
+  return dumpdir_next (itr);
+}
+
+/* Return size in bytes of the dumpdir array P */
+size_t
+dumpdir_size (const char *p)
+{
+  size_t totsize = 0;
+
+  while (*p)
+    {
+      size_t size = strlen (p) + 1;
+      totsize += size;
+      p += size;
+    }
+  return totsize + 1;
+}
+
+
+static struct directory *dirhead, *dirtail;
 static Hash_table *directory_table;
 static Hash_table *directory_meta_table;
 
@@ -118,16 +250,66 @@ static struct directory *
 make_directory (const char *name)
 {
   size_t namelen = strlen (name);
-  size_t size = offsetof (struct directory, name) + namelen + 1;
-  struct directory *directory = xmalloc (size);
-  directory->contents = directory->icontents = NULL;
+  struct directory *directory = xmalloc (sizeof (*directory));
+  directory->next = NULL;
+  directory->dump = directory->idump = NULL;
   directory->orig = NULL;
   directory->flags = false;
-  strcpy (directory->name, name);
-  if (ISSLASH (directory->name[namelen-1]))
-    directory->name[namelen-1] = 0;
+  if (namelen && ISSLASH (name[namelen - 1]))
+    namelen--;
+  directory->name = xmalloc (namelen + 1);
+  memcpy (directory->name, name, namelen);
+  directory->name[namelen] = 0;
   directory->tagfile = NULL;
   return directory;
+}
+
+static void
+free_directory (struct directory *dir)
+{
+  free (dir->name);
+  free (dir);
+}
+
+static struct directory *
+attach_directory (const char *name)
+{
+  struct directory *dir = make_directory (name);
+  if (dirtail)
+    dirtail->next = dir;
+  else
+    dirhead = dir;
+  dirtail = dir;
+  return dir;
+}
+		 
+
+static void
+replace_prefix (char **pname, const char *samp, size_t slen,
+		const char *repl, size_t rlen)
+{
+  char *name = *pname;
+  size_t nlen = strlen (name);
+  if (nlen > slen && memcmp (name, samp, slen) == 0 && ISSLASH (name[slen]))
+    {
+      if (rlen > slen)
+	{
+	  name = xrealloc (name, nlen - slen + rlen + 1);
+	  *pname = name;
+	}
+      memmove (name + rlen, name + slen, nlen - slen + 1);
+      memcpy (name, repl, rlen);
+    }
+}
+
+void
+dirlist_replace_prefix (const char *pref, const char *repl)
+{
+  struct directory *dp;
+  size_t pref_len = strlen (pref);
+  size_t repl_len = strlen (repl);
+  for (dp = dirhead; dp; dp = dp->next)
+    replace_prefix (&dp->name, pref, pref_len, repl, repl_len);
 }
 
 /* Create and link a new directory entry for directory NAME, having a
@@ -136,9 +318,10 @@ make_directory (const char *name)
    found that the directory exists.  */
 static struct directory *
 note_directory (char const *name, struct timespec mtime,
-		dev_t dev, ino_t ino, bool nfs, bool found, char *contents)
+		dev_t dev, ino_t ino, bool nfs, bool found,
+		const char *contents)
 {
-  struct directory *directory = make_directory (name);
+  struct directory *directory = attach_directory (name);
 
   directory->mtime = mtime;
   directory->device_number = dev;
@@ -149,13 +332,9 @@ note_directory (char const *name, struct timespec mtime,
   if (found)
     DIR_SET_FLAG (directory, DIRF_FOUND);
   if (contents)
-    {
-      size_t size = dumpdir_size (contents);
-      directory->contents = xmalloc (size);
-      memcpy (directory->contents, contents, size);
-    }
+    directory->dump = dumpdir_create (contents);
   else
-    directory->contents = NULL;
+    directory->dump = NULL;
 
   if (! ((directory_table
 	  || (directory_table = hash_initialize (0, 0,
@@ -185,7 +364,7 @@ find_directory (const char *name)
     {
       struct directory *dir = make_directory (name);
       struct directory *ret = hash_lookup (directory_table, dir);
-      free (dir);
+      free_directory (dir);
       return ret;
     }
 }
@@ -204,7 +383,7 @@ find_directory_meta (dev_t dev, ino_t ino)
       dir->device_number = dev;
       dir->inode_number = ino;
       ret = hash_lookup (directory_meta_table, dir);
-      free (dir);
+      free_directory (dir);
       return ret;
     }
 }
@@ -228,11 +407,14 @@ update_parent_directory (const char *name)
   free (p);
 }
 
+#define PD_VERBOSE        0x10
+#define PD_FORCE_CHILDREN 0x20
+#define PD_CHILDREN(f) ((f) & 3)
+
 static struct directory *
 procdir (char *name_buffer, struct stat *stat_data,
 	 dev_t device,
-	 enum children children,
-	 bool verbose,
+	 int flag,
 	 char *entry)
 {
   struct directory *directory;
@@ -250,7 +432,8 @@ procdir (char *name_buffer, struct stat *stat_data,
 	 directories, consider all NFS devices as equal,
 	 relying on the i-node to establish differences.  */
 
-      if (! (((DIR_IS_NFS (directory) & nfs)
+      if (! ((!check_device_option
+	      || (DIR_IS_NFS (directory) && nfs)
 	      || directory->device_number == stat_data->st_dev)
 	     && directory->inode_number == stat_data->st_ino))
 	{
@@ -259,12 +442,16 @@ procdir (char *name_buffer, struct stat *stat_data,
 						     stat_data->st_ino);
 	  if (d)
 	    {
-	      if (verbose_option)
-		WARN ((0, 0, _("%s: Directory has been renamed from %s"),
-		       quotearg_colon (name_buffer),
-		       quote_n (1, d->name)));
-	      directory->orig = d;
-	      DIR_SET_FLAG (directory, DIRF_RENAMED);
+	      if (strcmp (d->name, name_buffer))
+		{
+		  if (verbose_option)
+		    WARN ((0, 0, _("%s: Directory has been renamed from %s"),
+			   quotearg_colon (name_buffer),
+			   quote_n (1, d->name)));
+		  directory->orig = d;
+		  DIR_SET_FLAG (directory, DIRF_RENAMED);
+		  dirlist_replace_prefix (d->name, name_buffer);
+		}
 	      directory->children = CHANGED_CHILDREN;
 	    }
 	  else
@@ -299,18 +486,22 @@ procdir (char *name_buffer, struct stat *stat_data,
 
       if (d)
 	{
-	  if (verbose)
-	    WARN ((0, 0, _("%s: Directory has been renamed from %s"),
-		   quotearg_colon (name_buffer),
-		   quote_n (1, d->name)));
-	  directory->orig = d;
-	  DIR_SET_FLAG (directory, DIRF_RENAMED);
+	  if (strcmp (d->name, name_buffer))
+	    {
+	      if (flag & PD_VERBOSE)
+		WARN ((0, 0, _("%s: Directory has been renamed from %s"),
+		       quotearg_colon (name_buffer),
+		       quote_n (1, d->name)));
+	      directory->orig = d;
+	      DIR_SET_FLAG (directory, DIRF_RENAMED);
+	      dirlist_replace_prefix (d->name, name_buffer);
+	    }
 	  directory->children = CHANGED_CHILDREN;
 	}
       else
 	{
 	  DIR_SET_FLAG (directory, DIRF_NEW);
-	  if (verbose)
+	  if (flag & PD_VERBOSE)
 	    WARN ((0, 0, _("%s: Directory is new"),
 		   quotearg_colon (name_buffer)));
 	  directory->children =
@@ -329,95 +520,50 @@ procdir (char *name_buffer, struct stat *stat_data,
       /* ... except if it was explicitely given in the command line */
       && !is_individual_file (name_buffer))
     directory->children = NO_CHILDREN;
-  else if (children == ALL_CHILDREN)
-    directory->children = ALL_CHILDREN;
-
+  else if (flag & PD_FORCE_CHILDREN)
+    {
+      directory->children = PD_CHILDREN(flag);
+      if (directory->children == NO_CHILDREN)
+	*entry = 'N';
+    }
+	  
   DIR_SET_FLAG (directory, DIRF_INIT);
 
-  {
-    const char *tag_file_name;
-    size_t len;
-    
-    switch (check_exclusion_tags (name_buffer, &tag_file_name))
-      {
-      case exclusion_tag_all:
-	/* This warning can be duplicated by code in dump_file0, but only
-	   in case when the topmost directory being archived contains
-	   an exclusion tag. */
-	exclusion_tag_warning (name_buffer, tag_file_name,
-			       _("directory not dumped"));
-	if (entry)
-	  *entry = 'N';
-	directory->children = NO_CHILDREN;
-	break;
+  if (directory->children != NO_CHILDREN)
+    {
+      const char *tag_file_name;
 
-      case exclusion_tag_contents:
-	exclusion_tag_warning (name_buffer, tag_file_name,
-			       _("contents not dumped"));
-	directory->children = NO_CHILDREN;
-	break;
-	
-      case exclusion_tag_under:
-	exclusion_tag_warning (name_buffer, tag_file_name,
-			       _("contents not dumped"));
-	directory->tagfile = tag_file_name;
-	break;
-	
-      case exclusion_tag_none:
-	break;
-      }
-  }
+      switch (check_exclusion_tags (name_buffer, &tag_file_name))
+	{
+	case exclusion_tag_all:
+	  /* This warning can be duplicated by code in dump_file0, but only
+	     in case when the topmost directory being archived contains
+	     an exclusion tag. */
+	  exclusion_tag_warning (name_buffer, tag_file_name,
+				 _("directory not dumped"));
+	  if (entry)
+	    *entry = 'N';
+	  directory->children = NO_CHILDREN;
+	  break;
+
+	case exclusion_tag_contents:
+	  exclusion_tag_warning (name_buffer, tag_file_name,
+				 _("contents not dumped"));
+	  directory->children = NO_CHILDREN;
+	  break;
+	  
+	case exclusion_tag_under:
+	  exclusion_tag_warning (name_buffer, tag_file_name,
+				 _("contents not dumped"));
+	  directory->tagfile = tag_file_name;
+	  break;
+	  
+	case exclusion_tag_none:
+	  break;
+	}
+    }
 
   return directory;
-}
-
-/* Locate NAME in the dumpdir array DUMP.
-   Return pointer to the slot in the array, or NULL if not found */
-const char *
-dumpdir_locate (const char *dump, const char *name)
-{
-  if (dump)
-    while (*dump)
-      {
-	/* Ignore 'R' (rename) and 'X' (tempname) entries, since they break
-	   alphabetical ordering.
-	   They normally do not occur in dumpdirs from the snapshot files,
-	   but this function is also used by purge_directory, which operates
-	   on a dumpdir from the archive, hence the need for this test. */
-	if (!strchr ("RX", *dump))
-	  {
-	    int rc = strcmp (dump + 1, name);
-	    if (rc == 0)
-	      return dump;
-	    if (rc > 1)
-	      break;
-	  }
-	dump += strlen (dump) + 1;
-      }
-  return NULL;
-}
-
-/* Return size in bytes of the dumpdir array P */
-size_t
-dumpdir_size (const char *p)
-{
-  size_t totsize = 0;
-
-  while (*p)
-    {
-      size_t size = strlen (p) + 1;
-      totsize += size;
-      p += size;
-    }
-  return totsize + 1;
-}
-
-static int
-compare_dirnames (const void *first, const void *second)
-{
-  char const *const *name1 = first;
-  char const *const *name2 = second;
-  return strcmp (*name1, *name2);
 }
 
 /* Compare dumpdir array from DIRECTORY with directory listing DIR and
@@ -425,10 +571,10 @@ compare_dirnames (const void *first, const void *second)
 
    DIR must be returned by a previous call to savedir().
 
-   File names in DIRECTORY->contents must be sorted
+   File names in DIRECTORY->dump->contents must be sorted
    alphabetically.
 
-   DIRECTORY->contents is replaced with the created template. Each entry is
+   DIRECTORY->dump is replaced with the created template. Each entry is
    prefixed with ' ' if it was present in DUMP and with 'Y' otherwise. */
 
 void
@@ -440,15 +586,15 @@ makedumpdir (struct directory *directory, const char *dir)
   const char *p;
   char const **array;
   char *new_dump, *new_dump_ptr;
-  const char *dump;
+  struct dumpdir *dump;
 
   if (directory->children == ALL_CHILDREN)
     dump = NULL;
   else if (DIR_IS_RENAMED (directory))
-    dump = directory->orig->icontents ?
-              directory->orig->icontents : directory->orig->contents;
+    dump = directory->orig->idump ?
+           directory->orig->idump : directory->orig->dump;
   else
-    dump = directory->contents;
+    dump = directory->dump;
 
   /* Count the size of DIR and the number of elements it contains */
   dirsize = 0;
@@ -476,11 +622,10 @@ makedumpdir (struct directory *directory, const char *dir)
 	{
 	  if (directory->tagfile)
 	    *new_dump_ptr = strcmp (directory->tagfile, array[i]) == 0 ?
-		               ' ' : 'I';
+		                ' ' : 'I';
 	  else
 	    *new_dump_ptr = ' ';
 	  new_dump_ptr++;
-	  dump = loc + strlen (loc) + 1;
 	}
       else if (directory->tagfile)
 	*new_dump_ptr++ = strcmp (directory->tagfile, array[i]) == 0 ?
@@ -493,13 +638,13 @@ makedumpdir (struct directory *directory, const char *dir)
 	;
     }
   *new_dump_ptr = 0;
-  directory->icontents = directory->contents;
-  directory->contents = new_dump;
+  directory->idump = directory->dump;
+  directory->dump = dumpdir_create0 (new_dump, NULL);
   free (array);
 }
 
 /* Recursively scan the given directory. */
-static char *
+static const char *
 scan_directory (char *dir, dev_t device)
 {
   char *dirp = savedir (dir);	/* for scanning directory */
@@ -530,20 +675,21 @@ scan_directory (char *dir, dev_t device)
       return NULL;
     }
 
-  directory = procdir (name_buffer, &stat_data, device, NO_CHILDREN, false,
-		       NULL);
-  
+  directory = procdir (name_buffer, &stat_data, device, 0, NULL);
+
   if (dirp && directory->children != NO_CHILDREN)
     {
-      char  *entry;	/* directory entry being scanned */
+      char *entry;	/* directory entry being scanned */
       size_t entrylen;	/* length of directory entry */
+      dumpdir_iter_t itr;
 
       makedumpdir (directory, dirp);
 
-      for (entry = directory->contents;
-	   (entrylen = strlen (entry)) != 0;
-	   entry += entrylen + 1)
+      for (entry = dumpdir_first (directory->dump, 1, &itr);
+	   entry;
+	   entry = dumpdir_next (itr))
 	{
+	  entrylen = strlen (entry);
 	  if (name_buffer_size <= entrylen - 1 + name_length)
 	    {
 	      do
@@ -568,10 +714,13 @@ scan_directory (char *dir, dev_t device)
 
 	      if (S_ISDIR (stat_data.st_mode))
 		{
+		  int pd_flag = (verbose_option ? PD_VERBOSE : 0);
+		  if (!recursion_option)
+		    pd_flag |= PD_FORCE_CHILDREN | NO_CHILDREN;
+		  else if (directory->children == ALL_CHILDREN)
+		    pd_flag |= PD_FORCE_CHILDREN | ALL_CHILDREN;
 		  *entry = 'D';
-		  procdir (name_buffer, &stat_data, device,
-			   directory->children,
-			   verbose_option, entry);
+		  procdir (name_buffer, &stat_data, device, pd_flag, entry);
 		}
 
 	      else if (one_file_system_option && device != stat_data.st_dev)
@@ -590,16 +739,17 @@ scan_directory (char *dir, dev_t device)
 		*entry = 'Y';
 	    }
 	}
+      free (itr);
     }
 
   free (name_buffer);
   if (dirp)
     free (dirp);
 
-  return directory->contents;
+  return directory->dump ? directory->dump->contents : NULL;
 }
 
-char *
+const char *
 get_directory_contents (char *dir, dev_t device)
 {
   return scan_directory (dir, device);
@@ -622,12 +772,9 @@ obstack_code_rename (struct obstack *stk, char *from, char *to)
   obstack_grow (stk, s, strlen (s) + 1);
 }
 
-static bool
-rename_handler (void *data, void *proc_data)
+static void
+store_rename (struct directory *dir, struct obstack *stk)
 {
-  struct directory *dir = data;
-  struct obstack *stk = proc_data;
-
   if (DIR_IS_RENAMED (dir))
     {
       struct directory *prev, *p;
@@ -666,7 +813,6 @@ rename_handler (void *data, void *proc_data)
 	  obstack_code_rename (stk, "", prev->name);
 	}
     }
-  return true;
 }
 
 const char *
@@ -674,8 +820,9 @@ append_incremental_renames (const char *dump)
 {
   struct obstack stk;
   size_t size;
-
-  if (directory_table == NULL)
+  struct directory *dp;
+  
+  if (dirhead == NULL)
     return dump;
 
   obstack_init (&stk);
@@ -687,7 +834,9 @@ append_incremental_renames (const char *dump)
   else
     size = 0;
 
-  hash_do_for_each (directory_table, rename_handler, &stk);
+  for (dp = dirhead; dp; dp = dp->next)
+    store_rename (dp, &stk);
+
   if (obstack_object_size (&stk) != size)
     {
       obstack_1grow (&stk, 0);
@@ -1171,14 +1320,16 @@ write_directory_file_entry (void *entry, void *data)
       fwrite (s, strlen (s) + 1, 1, fp);
 
       fwrite (directory->name, strlen (directory->name) + 1, 1, fp);
-      if (directory->contents)
+      if (directory->dump)
 	{
-	  char *p;
-	  for (p = directory->contents; *p; p += strlen (p) + 1)
-	    {
-	      if (strchr ("YND", *p))
-		fwrite (p, strlen (p) + 1, 1, fp);
-	    }
+	  const char *p;
+	  dumpdir_iter_t itr;
+
+	  for (p = dumpdir_first (directory->dump, 0, &itr);
+	       p;
+	       p = dumpdir_next (itr))
+	    fwrite (p, strlen (p) + 1, 1, fp);
+	  free (itr);
 	}
       fwrite ("\0\0", 2, 1, fp);
     }
@@ -1366,6 +1517,7 @@ try_purge_directory (char const *directory_name)
   char *current_dir;
   char *cur, *arc, *p;
   char *temp_stub = NULL;
+  struct dumpdir *dump;
 
   if (!is_dumpdir (&current_stat_info))
     return false;
@@ -1417,12 +1569,12 @@ try_purge_directory (char const *directory_name)
 	     This is an extra safety precaution. Besides, it might be
 	     necessary to extract from archives created with tar versions
 	     prior to 1.19. */
-	  
+
 	  if (*src)
 	    src = safer_name_suffix (src, false, absolute_names_option);
 	  if (*dst)
 	    dst = safer_name_suffix (dst, false, absolute_names_option);
-	  
+
 	  if (*src == 0)
 	    src = temp_stub;
 	  else if (*dst == 0)
@@ -1442,6 +1594,7 @@ try_purge_directory (char const *directory_name)
   free (temp_stub);
 
   /* Process deletes */
+  dump = dumpdir_create (current_stat_info.dumpdir);
   p = NULL;
   for (cur = current_dir; *cur; cur += strlen (cur) + 1)
     {
@@ -1463,7 +1616,7 @@ try_purge_directory (char const *directory_name)
 	  continue;
 	}
 
-      if (!(entry = dumpdir_locate (current_stat_info.dumpdir, cur))
+      if (!(entry = dumpdir_locate (dump, cur))
 	  || (*entry == 'D' && !S_ISDIR (st.st_mode))
 	  || (*entry == 'Y' && S_ISDIR (st.st_mode)))
 	{
@@ -1489,7 +1642,8 @@ try_purge_directory (char const *directory_name)
 	}
     }
   free (p);
-
+  dumpdir_free (dump);
+  
   free (current_dir);
   return true;
 }
