@@ -1,7 +1,7 @@
 # Process this file with autom4te to create testsuite. -*- Autotest -*-
 
 # Test suite for GNU tar.
-# Copyright (C) 2004, 2007, 2009 Free Software Foundation, Inc.
+# Copyright (C) 2010 Free Software Foundation, Inc.
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -14,28 +14,25 @@
 # GNU General Public License for more details.
 
 # You should have received a copy of the GNU General Public License
-# along with this program; if not, write to the Free Software
-# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
-# 02110-1301, USA.
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-# tar should detect that its gzip child failed.
+AT_SETUP([multi-volume label])
+AT_KEYWORDS([label label02 multi-label multivolume multiv])
 
-AT_SETUP([gzip])
-AT_KEYWORDS([gzip])
-
-unset TAR_OPTIONS
-
-AT_CHECK([
-AT_GZIP_PREREQ
-tar xfvz /dev/null
+AT_TAR_CHECK([
+exec <&-
+genfile --length 0 --file foo
+genfile --length 12288 --file bar
+genfile --length 12288 --file baz
+tar --label=Test -cM -L10 -f 1.tar -f 2.tar -f 3.tar -f 4.tar foo bar baz
+tar -Mt -f 1.tar -f 2.tar -f 3.tar -f 4.tar 
 ],
-[2],
-[],
-[
-gzip: stdin: unexpected end of file
-tar: Child returned status 1
-tar: Error is not recoverable: exiting now
+[0],
+[Test Volume 1
+foo
+bar
+baz
 ],
-[],[])
+[],[],[],[gnu,oldgnu,posix])
 
 AT_CLEANUP

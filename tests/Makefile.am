@@ -87,6 +87,8 @@ TESTSUITE_AT = \
  incr06.at\
  indexfile.at\
  ignfail.at\
+ label01.at\
+ label02.at\
  link01.at\
  link02.at\
  link03.at\
@@ -103,6 +105,7 @@ TESTSUITE_AT = \
  multiv04.at\
  multiv05.at\
  multiv06.at\
+ multiv07.at\
  old.at\
  options.at\
  options02.at\
@@ -113,6 +116,8 @@ TESTSUITE_AT = \
  rename03.at\
  rename04.at\
  rename05.at\
+ remfiles01.at\
+ remfiles02.at\
  same-order01.at\
  same-order02.at\
  shortfile.at\
@@ -128,6 +133,8 @@ TESTSUITE_AT = \
  spmvp10.at\
  truncate.at\
  update.at\
+ update01.at\
+ update02.at\
  volsize.at\
  volume.at\
  verbose.at\

@@ -1,7 +1,7 @@
 /* Create a tar archive.
 
    Copyright (C) 1985, 1992, 1993, 1994, 1996, 1997, 1999, 2000, 2001,
-   2003, 2004, 2005, 2006, 2007, 2009 Free Software Foundation, Inc.
+   2003, 2004, 2005, 2006, 2007, 2009, 2010 Free Software Foundation, Inc.
 
    Written by John Gilmore, on 1985-08-25.
 
@@ -79,7 +79,7 @@ check_exclusion_tags (const char *dirname, const char **tag_file_name, struct ex
   struct exclusion_tag *tag;
   size_t dlen = strlen (dirname);
   int addslash = !ISSLASH (dirname[dlen-1]);
-  char *nptr = NULL;
+  size_t noff = 0;
   struct exclude* pexcl= NULL;
   if (excl) pexcl= *excl; /* Keep a copy of the original exclude struct */
   
@@ -90,17 +90,16 @@ check_exclusion_tags (const char *dirname, const char **tag_file_name, struct ex
 	{
 	  tagsize = size;
 	  tagname = xrealloc (tagname, tagsize);
-	  nptr = NULL;
 	}
 
-      if (!nptr)
+      if (noff == 0)
 	{
 	  strcpy (tagname, dirname);
-	  nptr = tagname + dlen;
+	  noff = dlen;
 	  if (addslash)
-	    *nptr++ = '/';
+	    tagname[noff++] = '/';
 	}
-      strcpy (nptr, tag->name);
+      strcpy (tagname + noff, tag->name);
       if (access (tagname, F_OK) == 0
 	  && (!tag->predicate || tag->predicate (tagname)))
 	{
@@ -451,8 +450,7 @@ mode_to_chars (mode_t v, char *p, size_t s)
       && S_IROTH == TOREAD && S_IWOTH == TOWRITE && S_IXOTH == TOEXEC
       && archive_format != POSIX_FORMAT
       && archive_format != USTAR_FORMAT
-      && archive_format != GNU_FORMAT
-      && archive_format != OLDGNU_FORMAT)
+      && archive_format != GNU_FORMAT)
     {
       negative = v < 0;
       u = v;
@@ -565,9 +563,8 @@ write_eot (void)
 
 /* Write a "private" header */
 union block *
-start_private_header (const char *name, size_t size)
+start_private_header (const char *name, size_t size, time_t t)
 {
-  time_t t;
   union block *header = find_next_block ();
 
   memset (header->buffer, 0, sizeof (union block));
@@ -575,7 +572,6 @@ start_private_header (const char *name, size_t size)
   tar_name_copy_str (header->header.name, name, NAME_FIELD_SIZE);
   OFF_TO_CHARS (size, header->header.size);
 
-  time (&t);
   TIME_TO_CHARS (t, header->header.mtime);
   MODE_TO_CHARS (S_IFREG|S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH, header->header.mode);
   UID_TO_CHARS (getuid (), header->header.uid);
@@ -613,13 +609,13 @@ write_gnu_long_link (struct tar_stat_info *st, const char *p, char type)
   union block *header;
   char *tmpname;
 
-  header = start_private_header ("././@LongLink", size);
-  FILL(header->header.mtime, '0');
-  FILL(header->header.mode, '0');
-  FILL(header->header.uid, '0');
-  FILL(header->header.gid, '0');
-  FILL(header->header.devmajor, 0);
-  FILL(header->header.devminor, 0);
+  header = start_private_header ("././@LongLink", size, time (NULL));
+  FILL (header->header.mtime, '0');
+  FILL (header->header.mode, '0');
+  FILL (header->header.uid, '0');
+  FILL (header->header.gid, '0');
+  FILL (header->header.devmajor, 0);
+  FILL (header->header.devminor, 0);
   uid_to_uname (0, &tmpname);
   UNAME_TO_CHARS (tmpname, header->header.uname);
   free (tmpname);
@@ -654,8 +650,10 @@ split_long_name (const char *name, size_t length)
 {
   size_t i;
 
-  if (length > PREFIX_FIELD_SIZE)
+  if (length > PREFIX_FIELD_SIZE + 1)
     length = PREFIX_FIELD_SIZE + 1;
+  else if (ISSLASH (name[length - 1]))
+    length--;
   for (i = length - 1; i > 0; i--)
     if (ISSLASH (name[i]))
       break;
@@ -666,9 +664,9 @@ static union block *
 write_ustar_long_name (const char *name)
 {
   size_t length = strlen (name);
-  size_t i;
+  size_t i, nlen;
   union block *header;
-
+  
   if (length > PREFIX_FIELD_SIZE + NAME_FIELD_SIZE + 1)
     {
       ERROR ((0, 0, _("%s: file name is too long (max %d); not dumped"),
@@ -678,7 +676,7 @@ write_ustar_long_name (const char *name)
     }
 
   i = split_long_name (name, length);
-  if (i == 0 || length - i - 1 > NAME_FIELD_SIZE)
+  if (i == 0 || (nlen = length - i - 1) > NAME_FIELD_SIZE || nlen == 0)
     {
       ERROR ((0, 0,
 	      _("%s: file name is too long (cannot be split); not dumped"),
@@ -762,7 +760,8 @@ write_extended (bool global, struct tar_stat_info *st, union block *old_header)
   union block *header, hp;
   char *p;
   int type;
-
+  time_t t;
+  
   if (st->xhdr.buffer || st->xhdr.stk == NULL)
     return old_header;
 
@@ -772,13 +771,15 @@ write_extended (bool global, struct tar_stat_info *st, union block *old_header)
     {
       type = XGLTYPE;
       p = xheader_ghdr_name ();
+      time (&t);
     }
   else
     {
       type = XHDTYPE;
       p = xheader_xhdr_name (st);
+      t = st->stat.st_mtime;
     }
-  xheader_write (type, p, &st->xhdr);
+  xheader_write (type, p, t, &st->xhdr);
   free (p);
   header = find_next_block ();
   memcpy (header, &hp.buffer, sizeof (hp.buffer));
@@ -1043,11 +1044,9 @@ finish_header (struct tar_stat_info *st,
       && header->header.typeflag != XHDTYPE
       && header->header.typeflag != XGLTYPE)
     {
-      /* These globals are parameters to print_header, sigh.  */
-
-      current_header = header;
+      /* FIXME: This global is used in print_header, sigh.  */
       current_format = archive_format;
-      print_header (st, block_ordinal);
+      print_header (st, header, block_ordinal);
     }
 
   header = write_extended (false, st, header);
@@ -1145,73 +1144,70 @@ dump_dir0 (char *directory,
 {
   dev_t our_device = st->stat.st_dev;
   const char *tag_file_name;
-  
-  if (!is_avoided_name (st->orig_file_name))
+  union block *blk = NULL;
+  off_t block_ordinal = current_block_ordinal ();
+
+  st->stat.st_size = 0;	/* force 0 size on dir */
+
+  blk = start_header (st);
+  if (!blk)
+    return;
+
+  if (incremental_option && archive_format != POSIX_FORMAT)
+    blk->header.typeflag = GNUTYPE_DUMPDIR;
+  else /* if (standard_option) */
+    blk->header.typeflag = DIRTYPE;
+
+  /* If we're gnudumping, we aren't done yet so don't close it.  */
+
+  if (!incremental_option)
+    finish_header (st, blk, block_ordinal);
+  else if (gnu_list_name->directory)
     {
-      union block *blk = NULL;
-      off_t block_ordinal = current_block_ordinal ();
-      st->stat.st_size = 0;	/* force 0 size on dir */
-
-      blk = start_header (st);
-      if (!blk)
-	return;
-
-      if (incremental_option && archive_format != POSIX_FORMAT)
-	blk->header.typeflag = GNUTYPE_DUMPDIR;
-      else /* if (standard_option) */
-	blk->header.typeflag = DIRTYPE;
-
-      /* If we're gnudumping, we aren't done yet so don't close it.  */
-
-      if (!incremental_option)
-	finish_header (st, blk, block_ordinal);
-      else if (gnu_list_name->directory)
+      if (archive_format == POSIX_FORMAT)
 	{
-	  if (archive_format == POSIX_FORMAT)
-	    {
-	      xheader_store ("GNU.dumpdir", st,
-			     safe_directory_contents (gnu_list_name->directory));
-	      finish_header (st, blk, block_ordinal);
-	    }
-	  else
-	    {
-	      off_t size_left;
-	      off_t totsize;
-	      size_t bufsize;
-	      ssize_t count;
-	      const char *buffer, *p_buffer;
-
-	      block_ordinal = current_block_ordinal ();
-	      buffer = safe_directory_contents (gnu_list_name->directory);
-	      totsize = dumpdir_size (buffer);
-	      OFF_TO_CHARS (totsize, blk->header.size);
-	      finish_header (st, blk, block_ordinal);
-	      p_buffer = buffer;
-	      size_left = totsize;
-
-	      mv_begin (st);
-	      mv_total_size (totsize);
-	      while (size_left > 0)
-		{
-		  mv_size_left (size_left);
-		  blk = find_next_block ();
-		  bufsize = available_space_after (blk);
-		  if (size_left < bufsize)
-		    {
-		      bufsize = size_left;
-		      count = bufsize % BLOCKSIZE;
-		      if (count)
-			memset (blk->buffer + size_left, 0, BLOCKSIZE - count);
-		    }
-		  memcpy (blk->buffer, p_buffer, bufsize);
-		  size_left -= bufsize;
-		  p_buffer += bufsize;
-		  set_next_block_after (blk + (bufsize - 1) / BLOCKSIZE);
-		}
-	      mv_end ();
-	    }
-	  return;
+	  xheader_store ("GNU.dumpdir", st,
+			 safe_directory_contents (gnu_list_name->directory));
+	  finish_header (st, blk, block_ordinal);
 	}
+      else
+	{
+	  off_t size_left;
+	  off_t totsize;
+	  size_t bufsize;
+	  ssize_t count;
+	  const char *buffer, *p_buffer;
+	  
+	  block_ordinal = current_block_ordinal ();
+	  buffer = safe_directory_contents (gnu_list_name->directory);
+	  totsize = dumpdir_size (buffer);
+	  OFF_TO_CHARS (totsize, blk->header.size);
+	  finish_header (st, blk, block_ordinal);
+	  p_buffer = buffer;
+	  size_left = totsize;
+	  
+	  mv_begin (st);
+	  mv_total_size (totsize);
+	  while (size_left > 0)
+	    {
+	      mv_size_left (size_left);
+	      blk = find_next_block ();
+	      bufsize = available_space_after (blk);
+	      if (size_left < bufsize)
+		{
+		  bufsize = size_left;
+		  count = bufsize % BLOCKSIZE;
+		  if (count)
+		    memset (blk->buffer + size_left, 0, BLOCKSIZE - count);
+		}
+	      memcpy (blk->buffer, p_buffer, bufsize);
+	      size_left -= bufsize;
+	      p_buffer += bufsize;
+	      set_next_block_after (blk + (bufsize - 1) / BLOCKSIZE);
+	    }
+	  mv_end ();
+	}
+      return;
     }
 
   if (!recursion_option)
@@ -1392,7 +1388,7 @@ create_archive (void)
 
   write_eot ();
   close_archive ();
-
+  finish_deferred_unlinks ();
   if (listed_incremental_option)
     write_directory_file ();
 }
@@ -1472,8 +1468,8 @@ dump_hard_link (struct tar_stat_info *st)
 	  blk->header.typeflag = LNKTYPE;
 	  finish_header (st, blk, block_ordinal);
 
-	  if (remove_files_option && unlink (st->orig_file_name) != 0)
-	    unlink_error (st->orig_file_name);
+	  if (remove_files_option)
+	    queue_deferred_unlink (st->orig_file_name, false);
 
 	  return true;
 	}
@@ -1615,9 +1611,6 @@ dump_file0 (struct tar_stat_info *st, const char *p,
       return;
     }
 
-  if (is_avoided_name (p))
-    return;
-
   is_dir = S_ISDIR (st->stat.st_mode) != 0;
 
   if (!is_dir && dump_hard_link (st))
@@ -1655,6 +1648,8 @@ dump_file0 (struct tar_stat_info *st, const char *p,
 	    {
 	      exclusion_tag_warning (st->orig_file_name, tag_file_name,
 				     _("directory not dumped"));
+	      if (fd >= 0)
+		close (fd);
 	      return;
 	    }
 	  
@@ -1739,18 +1734,7 @@ dump_file0 (struct tar_stat_info *st, const char *p,
 	}
 
       if (ok && remove_files_option)
-	{
-	  if (is_dir)
-	    {
-	      if (rmdir (p) != 0 && errno != ENOTEMPTY)
-		rmdir_error (p);
-	    }
-	  else
-	    {
-	      if (unlink (p) != 0)
-		unlink_error (p);
-	    }
-	}
+	queue_deferred_unlink (p, is_dir);
 
       return;
     }
@@ -1786,10 +1770,8 @@ dump_file0 (struct tar_stat_info *st, const char *p,
       /* nothing more to do to it */
 
       if (remove_files_option)
-	{
-	  if (unlink (p) == -1)
-	    unlink_error (p);
-	}
+	queue_deferred_unlink (p, false);
+
       file_count_links (st);
       return;
     }
@@ -1841,10 +1823,7 @@ dump_file0 (struct tar_stat_info *st, const char *p,
 
   finish_header (st, header, block_ordinal);
   if (remove_files_option)
-    {
-      if (unlink (p) == -1)
-	unlink_error (p);
-    }
+    queue_deferred_unlink (p, false);
 }
 
 void

@@ -1,7 +1,7 @@
 # Process this file with autom4te to create testsuite. -*- Autotest -*-
 
 # Test suite for GNU tar.
-# Copyright (C) 2004, 2007, 2009 Free Software Foundation, Inc.
+# Copyright (C) 2009 Free Software Foundation, Inc.
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -18,24 +18,38 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 # 02110-1301, USA.
 
-# tar should detect that its gzip child failed.
+# Description: See update01.at
+# Last-Affected-Version: 1.22.90
+# References: <4AD4E703.80500@teclabs.eu>
+#             http://lists.gnu.org/archive/html/bug-tar/2009-10/msg00017.html
 
-AT_SETUP([gzip])
-AT_KEYWORDS([gzip])
+AT_SETUP([update changed files])
+AT_KEYWORDS([update update02])
 
-unset TAR_OPTIONS
+AT_TAR_CHECK([
+AT_SORT_PREREQ
+mkdir a
+genfile --file a/b
 
-AT_CHECK([
-AT_GZIP_PREREQ
-tar xfvz /dev/null
+tar cf arc a
+
+echo "separator"
+
+sleep 2
+touch a/b
+
+tar ufv arc a
+echo "separator"
+tar tf arc | sort || exit 1
 ],
-[2],
-[],
-[
-gzip: stdin: unexpected end of file
-tar: Child returned status 1
-tar: Error is not recoverable: exiting now
-],
-[],[])
+[0],
+[separator
+a/b
+separator
+a/
+a/b
+a/b
+])
 
 AT_CLEANUP
+

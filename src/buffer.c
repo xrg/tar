@@ -1,7 +1,8 @@
 /* Buffer management for tar.
 
    Copyright (C) 1988, 1992, 1993, 1994, 1996, 1997, 1999, 2000, 2001,
-   2003, 2004, 2005, 2006, 2007, 2008, 2009 Free Software Foundation, Inc.
+   2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010 Free Software
+   Foundation, Inc.
 
    Written by John Gilmore, on 1985-08-25.
 
@@ -34,9 +35,6 @@
 
 /* Number of retries before giving up on read.  */
 #define READ_ERROR_MAX 10
-
-/* Globbing pattern to append to volume label if initial match failed.  */
-#define VOLUME_LABEL_APPEND " Volume [1-9]*"
 
 /* Variables.  */
 
@@ -203,6 +201,7 @@ enum compress_type {
   ct_compress,
   ct_gzip,
   ct_bzip2,
+  ct_lzip,
   ct_lzma,
   ct_lzop,
   ct_xz
@@ -220,12 +219,13 @@ struct zip_magic
 static struct zip_magic const magic[] = {
   { ct_tar },
   { ct_none, },
-  { ct_compress, 2, "\037\235", "compress", "-Z" },
-  { ct_gzip,     2, "\037\213", "gzip", "-z"  },
-  { ct_bzip2,    3, "BZh",      "bzip2", "-j" },
-  { ct_lzma,     6, "\xFFLZMA", "lzma", "--lzma" }, /* FIXME: ???? */
-  { ct_lzop,     4, "\211LZO",  "lzop", "--lzop" },
-  { ct_xz,       6, "\0xFD7zXZ", "-J" },
+  { ct_compress, 2, "\037\235",  COMPRESS_PROGRAM, "-Z" },
+  { ct_gzip,     2, "\037\213",  GZIP_PROGRAM,     "-z"  },
+  { ct_bzip2,    3, "BZh",       BZIP2_PROGRAM,    "-j" },
+  { ct_lzip,     4, "LZIP",      LZIP_PROGRAM,     "--lzip" },
+  { ct_lzma,     6, "\xFFLZMA",  LZMA_PROGRAM,     "--lzma" },
+  { ct_lzop,     4, "\211LZO",   LZOP_PROGRAM,     "--lzop" },
+  { ct_xz,       6, "\0xFD7zXZ", XZ_PROGRAM,       "-J" },
 };
 
 #define NMAGIC (sizeof(magic)/sizeof(magic[0]))
@@ -596,7 +596,8 @@ _open_archive (enum access_mode wanted_access)
       {
       case ACCESS_READ:
         archive = open_compressed_archive ();
-	guess_seekable_archive ();
+	if (archive >= 0)
+	  guess_seekable_archive ();
         break;
 
       case ACCESS_WRITE:
@@ -855,16 +856,16 @@ seek_archive (off_t size)
   off_t start = current_block_ordinal ();
   off_t offset;
   off_t nrec, nblk;
-  off_t skipped = (blocking_factor - (current_block - record_start));
+  off_t skipped = (blocking_factor - (current_block - record_start))
+                  * BLOCKSIZE;
 
-  size -= skipped * BLOCKSIZE;
-
-  if (size < record_size)
+  if (size <= skipped)
     return 0;
-  /* FIXME: flush? */
-
+  
   /* Compute number of records to skip */
-  nrec = size / record_size;
+  nrec = (size - skipped) / record_size;
+  if (nrec == 0)
+    return 0;
   offset = rmtlseek (archive, nrec * record_size, SEEK_CUR);
   if (offset < 0)
     return offset;
@@ -1166,7 +1167,7 @@ read_header0 (struct tar_stat_info *info)
   enum read_header rc;
 
   tar_stat_init (info);
-  rc = read_header_primitive (false, info);
+  rc = read_header (&current_header, info, read_header_auto);
   if (rc == HEADER_SUCCESS)
     {
       set_next_block_after (current_header);
@@ -1214,17 +1215,42 @@ try_new_volume ()
     {
     case XGLTYPE:
       {
-        if (!read_header0 (&dummy))
-          return false;
+	tar_stat_init (&dummy);
+	if (read_header (&header, &dummy, read_header_x_global)
+	    != HEADER_SUCCESS_EXTENDED)
+	  {
+	    ERROR ((0, 0, _("This does not look like a tar archive")));
+	    return false;
+	  }
+	
         xheader_decode (&dummy); /* decodes values from the global header */
         tar_stat_destroy (&dummy);
-        if (!real_s_name)
-          {
-            /* We have read the extended header of the first member in
-               this volume. Put it back, so next read_header works as
-               expected. */
-            current_block = record_start;
-          }
+	
+	/* The initial global header must be immediately followed by
+	   an extended PAX header for the first member in this volume.
+	   However, in some cases tar may split volumes in the middle
+	   of a PAX header. This is incorrect, and should be fixed
+           in the future versions. In the meantime we must be
+	   prepared to correctly list and extract such archives.
+
+	   If this happens, the following call to read_header returns
+	   HEADER_FAILURE, which is ignored.
+
+	   See also tests/multiv07.at */
+	       
+	switch (read_header (&header, &dummy, read_header_auto))
+	  {
+	  case HEADER_SUCCESS:
+	    set_next_block_after (header);
+	    break;
+
+	  case HEADER_FAILURE:
+	    break;
+
+	  default:
+	    ERROR ((0, 0, _("This does not look like a tar archive")));
+	    return false;
+	  }
         break;
       }
 
@@ -1311,31 +1337,57 @@ try_new_volume ()
 }
 
 
-/* Check the LABEL block against the volume label, seen as a globbing
+#define VOLUME_TEXT " Volume "
+#define VOLUME_TEXT_LEN (sizeof VOLUME_TEXT - 1)
+
+char *
+drop_volume_label_suffix (const char *label)
+{
+  const char *p;
+  size_t len = strlen (label);
+
+  if (len < 1)
+    return NULL;
+  
+  for (p = label + len - 1; p > label && isdigit ((unsigned char) *p); p--)
+    ;
+  if (p > label && p - (VOLUME_TEXT_LEN - 1) > label)
+    {
+      p -= VOLUME_TEXT_LEN - 1;
+      if (memcmp (p, VOLUME_TEXT, VOLUME_TEXT_LEN) == 0)
+	{
+	  char *s = xmalloc ((len = p - label) + 1);
+	  memcpy (s, label, len);
+	  s[len] = 0;
+	  return s;
+	}
+    }
+
+  return NULL;
+}
+      
+/* Check LABEL against the volume label, seen as a globbing
    pattern.  Return true if the pattern matches.  In case of failure,
    retry matching a volume sequence number before giving up in
    multi-volume mode.  */
 static bool
-check_label_pattern (union block *label)
+check_label_pattern (const char *label)
 {
   char *string;
   bool result;
 
-  if (! memchr (label->header.name, '\0', sizeof label->header.name))
-    return false;
-
-  if (fnmatch (volume_label_option, label->header.name, 0) == 0)
+  if (fnmatch (volume_label_option, label, 0) == 0)
     return true;
 
   if (!multi_volume_option)
     return false;
 
-  string = xmalloc (strlen (volume_label_option)
-                    + sizeof VOLUME_LABEL_APPEND + 1);
-  strcpy (string, volume_label_option);
-  strcat (string, VOLUME_LABEL_APPEND);
-  result = fnmatch (string, label->header.name, 0) == 0;
-  free (string);
+  string = drop_volume_label_suffix (label);
+  if (string)
+    {
+      result = fnmatch (string, volume_label_option, 0) == 0;
+      free (string);
+    }
   return result;
 }
 
@@ -1344,14 +1396,43 @@ check_label_pattern (union block *label)
 static void
 match_volume_label (void)
 {
-  union block *label = find_next_block ();
-
-  if (!label)
+  if (!volume_label)
+    {
+      union block *label = find_next_block ();
+  
+      if (!label)
+	FATAL_ERROR ((0, 0, _("Archive not labeled to match %s"),
+		      quote (volume_label_option)));
+      if (label->header.typeflag == GNUTYPE_VOLHDR)
+	{
+	  if (memchr (label->header.name, '\0', sizeof label->header.name))
+	    assign_string (&volume_label, label->header.name);
+	  else
+	    {
+	      volume_label = xmalloc (sizeof (label->header.name) + 1);
+	      memcpy (volume_label, label->header.name,
+		      sizeof (label->header.name));
+	      volume_label[sizeof (label->header.name)] = 0;
+	    }
+	}
+      else if (label->header.typeflag == XGLTYPE)
+	{
+	  struct tar_stat_info st;
+	  tar_stat_init (&st);
+	  xheader_read (&st.xhdr, label,
+			OFF_FROM_HEADER (label->header.size));
+	  xheader_decode (&st);
+	  tar_stat_destroy (&st);
+	}
+    }
+  
+  if (!volume_label)
     FATAL_ERROR ((0, 0, _("Archive not labeled to match %s"),
                   quote (volume_label_option)));
-  if (!check_label_pattern (label))
+  
+  if (!check_label_pattern (volume_label))
     FATAL_ERROR ((0, 0, _("Volume %s does not match %s"),
-                  quote_n (0, label->header.name),
+                  quote_n (0, volume_label),
                   quote_n (1, volume_label_option)));
 }
 

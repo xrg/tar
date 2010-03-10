@@ -1,7 +1,7 @@
 /* Extract files from a tar archive.
 
    Copyright (C) 1988, 1992, 1993, 1994, 1996, 1997, 1998, 1999, 2000,
-   2001, 2003, 2004, 2005, 2006, 2007 Free Software Foundation, Inc.
+   2001, 2003, 2004, 2005, 2006, 2007, 2010 Free Software Foundation, Inc.
 
    Written by John Gilmore, on 1985-11-19.
 
@@ -1092,8 +1092,6 @@ extract_fifo (char *file_name, int typeflag)
 static int
 extract_volhdr (char *file_name, int typeflag)
 {
-  if (verbose_option)
-    fprintf (stdlis, _("Reading %s\n"), quote (current_stat_info.file_name));
   skip_member ();
   return 0;
 }
@@ -1242,6 +1240,8 @@ extract_archive (void)
   char typeflag;
   tar_extractor_t fun;
 
+  fatal_exit_hook = extract_finish;
+  
   /* Try to disable the ability to unlink a directory.  */
   priv_set_remove_linkdir ();
 
@@ -1257,7 +1257,7 @@ extract_archive (void)
 
   /* Print the block from current_header and current_stat.  */
   if (verbose_option)
-    print_header (&current_stat_info, -1);
+    print_header (&current_stat_info, current_header, -1);
 
   /* Restore stats for all non-ancestor directories, unless
      it is an incremental archive.
@@ -1405,19 +1405,4 @@ rename_directory (char *src, char *dst)
       return false;
     }
   return true;
-}
-
-void
-fatal_exit (void)
-{
-  extract_finish ();
-  error (TAREXIT_FAILURE, 0, _("Error is not recoverable: exiting now"));
-  abort ();
-}
-
-void
-xalloc_die (void)
-{
-  error (0, 0, "%s", _("memory exhausted"));
-  fatal_exit ();
 }

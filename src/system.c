@@ -174,11 +174,11 @@ sys_wait_for_child (pid_t child_pid, bool eof)
 	{
 	  int sig = WTERMSIG (wait_status);
 	  if (!(!eof && sig == SIGPIPE))
-	    ERROR ((0, 0, _("Child died with signal %d"), sig));
+	    FATAL_ERROR ((0, 0, _("Child died with signal %d"), sig));
 	}
       else if (WEXITSTATUS (wait_status) != 0)
-	ERROR ((0, 0, _("Child returned status %d"),
-		WEXITSTATUS (wait_status)));
+	FATAL_ERROR ((0, 0, _("Child returned status %d"),
+		      WEXITSTATUS (wait_status)));
     }
 }
 
@@ -330,8 +330,9 @@ sys_child_open_for_compress (void)
 
   /* The new born child tar is here!  */
 
-  program_name = _("tar (child)");
-
+  set_program_name (_("tar (child)"));
+  signal (SIGPIPE, SIG_DFL);
+  
   xdup2 (parent_pipe[PREAD], STDIN_FILENO);
   xclose (parent_pipe[PWRITE]);
 
@@ -374,7 +375,7 @@ sys_child_open_for_compress (void)
     {
       /* The newborn grandchild tar is here!  Launch the compressor.  */
 
-      program_name = _("tar (grandchild)");
+      set_program_name (_("tar (grandchild)"));
 
       xdup2 (child_pipe[PWRITE], STDOUT_FILENO);
       xclose (child_pipe[PREAD]);
@@ -473,8 +474,9 @@ sys_child_open_for_uncompress (void)
 
   /* The newborn child tar is here!  */
 
-  program_name = _("tar (child)");
-
+  set_program_name (_("tar (child)"));
+  signal (SIGPIPE, SIG_DFL);
+  
   xdup2 (parent_pipe[PWRITE], STDOUT_FILENO);
   xclose (parent_pipe[PREAD]);
 
@@ -508,7 +510,7 @@ sys_child_open_for_uncompress (void)
     {
       /* The newborn grandchild tar is here!  Launch the uncompressor.  */
 
-      program_name = _("tar (grandchild)");
+      set_program_name (_("tar (grandchild)"));
 
       xdup2 (child_pipe[PREAD], STDIN_FILENO);
       xclose (child_pipe[PWRITE]);
@@ -627,6 +629,12 @@ static void
 stat_to_env (char *name, char type, struct tar_stat_info *st)
 {
   str_to_env ("TAR_VERSION", PACKAGE_VERSION);
+  str_to_env ("TAR_ARCHIVE", *archive_name_cursor);
+  dec_to_env ("TAR_VOLUME", archive_name_cursor - archive_name_array + 1);
+  dec_to_env ("TAR_BLOCKING_FACTOR", blocking_factor);
+  str_to_env ("TAR_FORMAT",
+	      archive_format_string (current_format == DEFAULT_FORMAT ?
+				     archive_format : current_format));
   chr_to_env ("TAR_FILETYPE", type);
   oct_to_env ("TAR_MODE", st->stat.st_mode);
   str_to_env ("TAR_FILENAME", name);
