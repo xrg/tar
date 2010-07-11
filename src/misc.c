@@ -25,13 +25,16 @@
 #include <xgetcwd.h>
 #include <unlinkdir.h>
 #include <utimens.h>
-#include <canonicalize.h>
 
 #if HAVE_STROPTS_H
 # include <stropts.h>
 #endif
 #if HAVE_SYS_FILIO_H
 # include <sys/filio.h>
+#endif
+
+#ifndef DOUBLE_SLASH_IS_DISTINCT_ROOT
+# define DOUBLE_SLASH_IS_DISTINCT_ROOT 0
 #endif
 
 
@@ -230,10 +233,99 @@ zap_slashes (char *name)
   return name;
 }
 
+/* Normalize NAME by resolving any relative references and
+   removing trailing slashes.  Destructive version: modifies its argument. */
+static int
+normalize_filename_x (char *name)
+{
+  char *p, *q;
+
+  p = name;
+  if (DOUBLE_SLASH_IS_DISTINCT_ROOT && ISSLASH (*p))
+    p++;
+
+  /* Remove /./, resolve /../ and compress sequences of slashes */
+  for (q = p; *q; )
+    {
+      if (ISSLASH (*q))
+	{
+	  *p++ = *q++;
+	  while (ISSLASH (*q))
+	    q++;
+	  continue;
+	}
+      else if (p == name)
+	{
+	  if (*q == '.')
+	    {
+	      if (ISSLASH (q[1]))
+		{
+		  q += 2;
+		  continue;
+		}
+	      if (q[1] == '.' && ISSLASH (q[2]))
+		return 1;
+	    }
+	}
+      else
+	{
+	  if (*q == '.' && ISSLASH (p[-1]))
+	    {
+	      if (ISSLASH (q[1]))
+		{
+		  q += 2;
+		  while (ISSLASH (*q))
+		    q++;
+		  continue;
+		}
+	      else if (q[1] == '.' && ISSLASH (q[2]))
+		{
+		  do
+		    {
+		      --p;
+		    }
+		  while (p > name && !ISSLASH (p[-1]));
+		  q += 3;
+		  continue;
+		}
+	    }
+	}
+      *p++ = *q++;
+    }
+
+  /* Remove trailing slashes */
+  while (p - 1 > name && ISSLASH (p[-1]))
+    p--;
+
+  *p = 0;
+  return 0;
+}
+
+/* Normalize NAME by resolving any relative references, removing trailing
+   slashes, and converting it to absolute file name.  Return the normalized
+   name, or NULL in case of error. */
+
 char *
 normalize_filename (const char *name)
 {
-  return zap_slashes (canonicalize_filename_mode (name, CAN_MISSING));
+  char *copy;
+
+  if (name[0] != '/')
+    {
+      copy = xgetcwd ();
+      copy = xrealloc (copy, strlen (copy) + strlen (name) + 2);
+
+      strcat (copy, "/");
+      strcat (copy, name);
+    }
+  else
+    copy = xstrdup (name);
+  if (normalize_filename_x (copy))
+    {
+      free (copy);
+      return NULL;
+    }
+  return xrealloc (copy, strlen (copy) + 1);
 }
 
 
@@ -301,7 +393,7 @@ code_timespec (struct timespec t, char sbuf[TIMESPEC_STRSIZE_BOUND])
   /* ignore invalid values of ns */
   if (BILLION <= ns || ns < 0)
     ns = 0;
-  
+
   if (negative && ns != 0)
     {
       s++;
@@ -759,7 +851,7 @@ file_removed_diag (const char *name, bool top_level,
 	       (0, 0, _("%s: File removed before we read it"),
 		quotearg_colon (name)));
       set_exit_status (TAREXIT_DIFFERS);
-    }      
+    }
   else
     diagfn (name);
 }
@@ -869,6 +961,3 @@ namebuf_name (namebuf_t buf, const char *name)
   strcpy (buf->buffer + buf->dir_length, name);
   return buf->buffer;
 }
-
-
-  

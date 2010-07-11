@@ -66,6 +66,7 @@ TESTSUITE_AT = \
  exclude03.at\
  exclude04.at\
  exclude05.at\
+ exclude06.at\
  extrac01.at\
  extrac02.at\
  extrac03.at\
@@ -89,6 +90,9 @@ TESTSUITE_AT = \
  ignfail.at\
  label01.at\
  label02.at\
+ label03.at\
+ label04.at\
+ label05.at\
  link01.at\
  link02.at\
  link03.at\
@@ -118,11 +122,13 @@ TESTSUITE_AT = \
  rename05.at\
  remfiles01.at\
  remfiles02.at\
+ remfiles03.at\
  same-order01.at\
  same-order02.at\
  shortfile.at\
  shortupd.at\
  shortrec.at\
+ sigpipe.at\
  sparse01.at\
  sparse02.at\
  sparse03.at\

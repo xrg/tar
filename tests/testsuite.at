@@ -130,6 +130,7 @@ m4_include([exclude02.at])
 m4_include([exclude03.at])
 m4_include([exclude04.at])
 m4_include([exclude05.at])
+m4_include([exclude06.at])
 
 m4_include([delete01.at])
 m4_include([delete02.at])
@@ -148,6 +149,9 @@ m4_include([extrac08.at])
 
 m4_include([label01.at])
 m4_include([label02.at])
+m4_include([label03.at])
+m4_include([label04.at])
+m4_include([label05.at])
 
 m4_include([backup01.at])
 
@@ -226,6 +230,9 @@ m4_include([grow.at])
 
 m4_include([remfiles01.at])
 m4_include([remfiles02.at])
+m4_include([remfiles03.at])
+
+m4_include([sigpipe.at])
 
 m4_include([star/gtarfail.at])
 m4_include([star/gtarfail2.at])

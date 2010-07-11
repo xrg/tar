@@ -1,7 +1,7 @@
 /* Common declarations for the tar program.
 
    Copyright (C) 1988, 1992, 1993, 1994, 1996, 1997, 1999, 2000, 2001,
-   2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010 Free Software Foundation, 
+   2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010 Free Software Foundation,
    Inc.
 
    This program is free software; you can redistribute it and/or modify it
@@ -105,6 +105,8 @@ GLOBAL bool absolute_names_option;
 
 /* Display file times in UTC */
 GLOBAL bool utc_option;
+/* Output file timestamps to the full resolution */
+GLOBAL bool full_time_option;
 
 /* This variable tells how to interpret newer_mtime_option, below.  If zero,
    files get archived if their mtime is not less than newer_mtime_option.
@@ -339,12 +341,12 @@ struct name
     int matching_flags;         /* wildcard flags if name is a pattern */
     bool cmdline;               /* true if this name was given in the
 				   command line */
-    
+
     int change_dir;		/* Number of the directory to change to.
 				   Set with the -C option. */
     uintmax_t found_count;	/* number of times a matching file has
 				   been found */
-    
+
     /* The following members are used for incremental dumps only,
        if this struct name represents a directory;
        see incremen.c */
@@ -469,7 +471,7 @@ enum exclusion_tag_type check_exclusion_tags (const char *dirname,
 					      const char **tag_file_name,
 					      struct exclude ** excl,
 					      struct exclude **nexcl);
-     
+
 #define GID_TO_CHARS(val, where) gid_to_chars (val, where, sizeof (where))
 #define MAJOR_TO_CHARS(val, where) major_to_chars (val, where, sizeof (where))
 #define MINOR_TO_CHARS(val, where) minor_to_chars (val, where, sizeof (where))
@@ -696,6 +698,7 @@ struct name *addname (char const *string, int change_dir,
 void remname (struct name *name);
 bool name_match (const char *name);
 void names_notfound (void);
+void label_notfound (void);
 void collect_and_sort_names (void);
 struct name *name_scan (const char *name);
 struct name const *name_from_list (void);
@@ -862,4 +865,3 @@ void finish_deferred_unlinks (void);
 
 /* Module exit.c */
 extern void (*fatal_exit_hook) (void);
-
