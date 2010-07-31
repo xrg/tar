@@ -1,14 +1,16 @@
+%define git_repo tar
+%define git_head xrg
+
 Summary:	A GNU file archiving program
 Name:		tar
-Version:	1.22
-Release:	%mkrel 2
+Version:	%{git_get_ver}
+Release:	%mkrel %{git_get_rel}
 License:	GPLv3
 Group:		Archiving/Backup
 URL:		http://www.gnu.org/software/tar/tar.html
-Source0:	ftp://ftp.gnu.org/gnu/tar/%{name}-%{version}.tar.bz2
-Source1:	%{SOURCE0}.sig
-Source2:	%{name}-help2man.bz2
-Patch0:		tar-compatibility-Y-flag.patch
+Source0:	%git_bs_source %{name}-%{version}.tar.gz
+Source1:	%{name}-gitrpm.version
+Source2:	%{name}-changelog.gitrpm.txt
 BuildRequires:	bison xz
 Requires(post):		info-install
 Requires(preun):	info-install
@@ -33,15 +35,21 @@ compression and decompression utilities essential for working
 with files.
 
 %prep
+%git_get_source
 %setup -q
-%patch0 -p1
 
-bzcat %{SOURCE2} > ./help2man
-chmod +x ./help2man
-
-xz ChangeLog
+# bzcat %{SOURCE2} > ./help2man
+# chmod +x ./help2man
 
 %build
+if [ -d %{git_repodir}/%{git_repo} ] ; then
+    ./bootstrap \
+	--paxutils-srcdir=%{git_repodir}/%{git_repo}/paxutils \
+	--gnulib-srcdir=%{git_repodir}/%{git_repo}/gnulib
+else
+    ./bootstrap
+fi
+
 %configure2_5x \
 	--enable-backup-scripts \
 	--bindir=/bin \
@@ -88,7 +96,7 @@ rm -rf %{buildroot}
 
 %files -f %{name}.lang
 %defattr(-,root,root)
-%doc AUTHORS ChangeLog.xz NEWS README THANKS TODO
+%doc AUTHORS NEWS README THANKS TODO
 /bin/*
 %{_libexecdir}/backup.sh
 %{_libexecdir}/dump-remind
@@ -96,3 +104,5 @@ rm -rf %{buildroot}
 /sbin/%rmtrealname
 %{_infodir}/*.info*
 %{_mandir}/man?/*
+
+%changelog -f  %{_sourcedir}/%{name}-changelog.gitrpm.txt
