@@ -1,10 +1,10 @@
 /* xsparse - expands compressed sparse file images extracted from GNU tar
    archives.
 
-   Copyright (C) 2006, 2007 Free Software Foundation, Inc.
+   Copyright (C) 2006, 2007, 2010 Free Software Foundation, Inc.
 
    Written by Sergey Poznyakoff
-   
+
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
    Free Software Foundation; either version 3, or (at your option) any later
@@ -20,6 +20,7 @@
    51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.  */
 
 #include <stdlib.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
@@ -39,7 +40,7 @@
 struct sp_array
 {
   off_t offset;
-  size_t numbytes;
+  off_t numbytes;
 };
 
 char *progname;
@@ -129,12 +130,12 @@ get_var (FILE *fp, char **name, char **value)
   static char *buffer;
   static size_t bufsize = OFF_T_STRSIZE_BOUND;
   char *p, *q;
-  
+
   buffer = emalloc (bufsize);
   do
     {
       size_t len, s;
-      
+
       if (!fgets (buffer, bufsize, fp))
 	return 0;
       len = strlen (buffer);
@@ -163,7 +164,7 @@ get_var (FILE *fp, char **name, char **value)
   p += 11;
   q = strchr (p, '=');
   if (!q)
-    die (1, "malformed header: expected `=' not found");
+    die (1, "malformed header: expected '=' not found");
   *q++ = 0;
   q[strlen (q) - 1] = 0;
   *name = p;
@@ -186,14 +187,14 @@ read_xheader (char *name)
 
   if (verbose)
     printf ("Reading extended header file\n");
-  
+
   while (get_var (fp, &kw, &val))
     {
       if (verbose)
 	printf ("Found variable GNU.sparse.%s = %s\n", kw, val);
-      
+
       if (expect && strcmp (kw, expect))
-	die (1, "bad keyword sequence: expected `%s' but found `%s'",
+	die (1, "bad keyword sequence: expected '%s' but found '%s'",
 	     expect, kw);
       expect = NULL;
       if (strcmp (kw, "name") == 0)
@@ -226,7 +227,7 @@ read_xheader (char *name)
 	}
       else if (strcmp (kw, "numbytes") == 0)
 	{
-	  sparse_map[i++].numbytes = string_to_size (val, NULL);
+	  sparse_map[i++].numbytes = string_to_off (val, NULL);
 	}
       else if (strcmp (kw, "map") == 0)
 	{
@@ -234,13 +235,13 @@ read_xheader (char *name)
 	    {
 	      sparse_map[i].offset = string_to_off (val, &val);
 	      if (*val != ',')
-		die (1, "bad GNU.sparse.map: expected `,' but found `%c'",
+		die (1, "bad GNU.sparse.map: expected ',' but found '%c'",
 		     *val);
-	      sparse_map[i].numbytes = string_to_size (val+1, &val);
+	      sparse_map[i].numbytes = string_to_off (val+1, &val);
 	      if (*val != ',')
 		{
 		  if (!(*val == 0 && i == sparse_map_size-1))
-		    die (1, "bad GNU.sparse.map: expected `,' but found `%c'",
+		    die (1, "bad GNU.sparse.map: expected ',' but found '%c'",
 			 *val);
 		}
 	      else
@@ -251,7 +252,7 @@ read_xheader (char *name)
 	}
     }
   if (expect)
-    die (1, "bad keyword sequence: expected `%s' not found", expect);
+    die (1, "bad keyword sequence: expected '%s' not found", expect);
   if (version_major == 0 && sparse_map_size == 0)
     die (1, "size of the sparse map unknown");
   if (i != sparse_map_size)
@@ -267,7 +268,7 @@ read_map (FILE *ifp)
 
   if (verbose)
     printf ("Reading v.1.0 sparse map\n");
-  
+
   get_line (nbuf, sizeof nbuf, ifp);
   sparse_map_size = string_to_size (nbuf, NULL);
   sparse_map = emalloc (sparse_map_size * sizeof *sparse_map);
@@ -277,31 +278,34 @@ read_map (FILE *ifp)
       get_line (nbuf, sizeof nbuf, ifp);
       sparse_map[i].offset = string_to_off (nbuf, NULL);
       get_line (nbuf, sizeof nbuf, ifp);
-      sparse_map[i].numbytes = string_to_size (nbuf, NULL);
+      sparse_map[i].numbytes = string_to_off (nbuf, NULL);
     }
 
   fseeko (ifp, ((ftell (ifp) + BLOCKSIZE - 1) / BLOCKSIZE) * BLOCKSIZE,
 	  SEEK_SET);
-}  
+}
 
 void
 expand_sparse (FILE *sfp, int ofd)
 {
   size_t i;
-  size_t maxbytes = 0;
+  off_t max_numbytes = 0;
+  size_t maxbytes;
   char *buffer;
 
   for (i = 0; i < sparse_map_size; i++)
-    if (maxbytes < sparse_map[i].numbytes)
-      maxbytes = sparse_map[i].numbytes;
-  
+    if (max_numbytes < sparse_map[i].numbytes)
+      max_numbytes = sparse_map[i].numbytes;
+
+  maxbytes = max_numbytes < SIZE_MAX ? max_numbytes : SIZE_MAX;
+
   for (buffer = malloc (maxbytes); !buffer; maxbytes /= 2)
     if (maxbytes == 0)
       die (1, "not enough memory");
-  
+
   for (i = 0; i < sparse_map_size; i++)
     {
-      size_t size = sparse_map[i].numbytes;
+      off_t size = sparse_map[i].numbytes;
 
       if (size == 0)
 	ftruncate (ofd, sparse_map[i].offset);
@@ -342,13 +346,13 @@ guess_outname (char *name)
 {
   char *p;
   char *s;
-  
+
   if (name[0] == '.' && name[1] == '/')
     name += 2;
 
   p = name + strlen (name) - 1;
   s = NULL;
-      
+
   for (; p > name && *p != '/'; p--)
     ;
   if (*p == '/')
@@ -358,7 +362,7 @@ guess_outname (char *name)
       for (p--; p > name && *p != '/'; p--)
 	;
     }
-  
+
   if (*p != '/')
     {
       if (s)
@@ -389,7 +393,7 @@ main (int argc, char **argv)
   FILE *ifp;
   struct stat st;
   int ofd;
-  
+
   progname = argv[0];
   while ((c = getopt (argc, argv, "hnvx:")) != EOF)
     {
@@ -408,7 +412,7 @@ main (int argc, char **argv)
 	case 'v':
 	  verbose++;
 	  break;
-	  
+
 	default:
 	  exit (1);
 	}
@@ -429,30 +433,30 @@ main (int argc, char **argv)
 
   if (stat (inname, &st))
     die (1, "cannot stat %s (%d)", inname, errno);
-  
+
   ifp = fopen (inname, "r");
   if (ifp == NULL)
     die (1, "cannot open file %s (%d)", inname, errno);
-  
+
   if (!xheader_file || version_major == 1)
     read_map (ifp);
 
   if (!outname)
     guess_outname (inname);
-  
+
   ofd = open (outname, O_RDWR|O_CREAT|O_TRUNC, st.st_mode);
   if (ofd == -1)
     die (1, "cannot open file %s (%d)", outname, errno);
 
   if (verbose)
-    printf ("Expanding file `%s' to `%s'\n", inname, outname);
+    printf ("Expanding file '%s' to '%s'\n", inname, outname);
 
   if (dry_run)
     {
       printf ("Finished dry run\n");
       return 0;
     }
-  
+
   expand_sparse (ifp, ofd);
 
   fclose (ifp);
@@ -460,7 +464,7 @@ main (int argc, char **argv)
 
   if (verbose)
     printf ("Done\n");
-  
+
   if (outsize)
     {
       if (stat (outname, &st))
@@ -468,7 +472,6 @@ main (int argc, char **argv)
       if (st.st_size != outsize)
 	die (1, "expanded file has wrong size");
     }
-  
+
   return 0;
 }
-

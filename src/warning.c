@@ -41,6 +41,8 @@ static char const *const warning_args[] = {
   "unknown-cast",
   "unknown-keyword",
   "xdev",
+  "decompress-program",
+  "existing-file",
   NULL
 };
 
@@ -64,7 +66,9 @@ static int warning_types[] = {
   WARN_TIMESTAMP,
   WARN_UNKNOWN_CAST,
   WARN_UNKNOWN_KEYWORD,
-  WARN_XDEV
+  WARN_XDEV,
+  WARN_DECOMPRESS_PROGRAM,
+  WARN_EXISTING_FILE
 };
 
 ARGMATCH_VERIFY (warning_args, warning_types);
@@ -76,7 +80,7 @@ set_warning_option (const char *arg)
 {
   int negate = 0;
   int option;
-  
+
   if (strcmp (arg, "none") == 0)
     {
       warning_option = 0;
@@ -88,11 +92,10 @@ set_warning_option (const char *arg)
       arg += 3;
     }
 
-  option = XARGMATCH ("--warning", arg, 
+  option = XARGMATCH ("--warning", arg,
 		      warning_args, warning_types);
   if (negate)
     warning_option &= ~option;
   else
     warning_option |= option;
 }
-  

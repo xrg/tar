@@ -1,6 +1,7 @@
 /* Functions for dealing with sparse files
 
-   Copyright (C) 2003, 2004, 2005, 2006, 2007 Free Software Foundation, Inc.
+   Copyright (C) 2003, 2004, 2005, 2006, 2007, 2010 Free Software
+   Foundation, Inc.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -216,43 +217,45 @@ sparse_scan_file (struct tar_sparse_file *file)
   struct tar_stat_info *st = file->stat_info;
   int fd = file->fd;
   char buffer[BLOCKSIZE];
-  size_t count;
+  size_t count = 0;
   off_t offset = 0;
   struct sp_array sp = {0, 0};
 
-  if (!lseek_or_error (file, 0))
-    return false;
-
   st->archive_file_size = 0;
 
-  if (!tar_sparse_scan (file, scan_begin, NULL))
-    return false;
-
-  while ((count = safe_read (fd, buffer, sizeof buffer)) != 0
-	 && count != SAFE_READ_ERROR)
+  if (ST_NBLOCKS (st->stat) == 0)
+    offset = st->stat.st_size;
+  else
     {
-      /* Analyze the block.  */
-      if (zero_block_p (buffer, count))
+      if (!tar_sparse_scan (file, scan_begin, NULL))
+	return false;
+
+      while ((count = blocking_read (fd, buffer, sizeof buffer)) != 0
+	     && count != SAFE_READ_ERROR)
 	{
-	  if (sp.numbytes)
+	  /* Analyze the block.  */
+	  if (zero_block_p (buffer, count))
 	    {
-	      sparse_add_map (st, &sp);
-	      sp.numbytes = 0;
-	      if (!tar_sparse_scan (file, scan_block, NULL))
+	      if (sp.numbytes)
+		{
+		  sparse_add_map (st, &sp);
+		  sp.numbytes = 0;
+		  if (!tar_sparse_scan (file, scan_block, NULL))
+		    return false;
+		}
+	    }
+	  else
+	    {
+	      if (sp.numbytes == 0)
+		sp.offset = offset;
+	      sp.numbytes += count;
+	      st->archive_file_size += count;
+	      if (!tar_sparse_scan (file, scan_block, buffer))
 		return false;
 	    }
-	}
-      else
-	{
-	  if (sp.numbytes == 0)
-	    sp.offset = offset;
-	  sp.numbytes += count;
-	  st->archive_file_size += count;
-	  if (!tar_sparse_scan (file, scan_block, buffer))
-	    return false;
-	}
 
-      offset += count;
+	  offset += count;
+	}
     }
 
   if (sp.numbytes == 0)
@@ -324,7 +327,6 @@ sparse_dump_region (struct tar_sparse_file *file, size_t i)
       memset (blk->buffer + bytes_read, 0, BLOCKSIZE - bytes_read);
       bytes_left -= bytes_read;
       file->dumped_size += bytes_read;
-      mv_size_left (file->stat_info->archive_file_size - file->dumped_size);
       set_next_block_after (blk);
     }
 
@@ -334,7 +336,7 @@ sparse_dump_region (struct tar_sparse_file *file, size_t i)
 static bool
 sparse_extract_region (struct tar_sparse_file *file, size_t i)
 {
-  size_t write_size;
+  off_t write_size;
 
   if (!lseek_or_error (file, file->stat_info->sparse_map[i].offset))
     return false;
@@ -358,7 +360,7 @@ sparse_extract_region (struct tar_sparse_file *file, size_t i)
 	  return false;
 	}
       set_next_block_after (blk);
-      count = full_write (file->fd, blk->buffer, wrbytes);
+      count = blocking_write (file->fd, blk->buffer, wrbytes);
       write_size -= count;
       file->dumped_size += count;
       mv_size_left (file->stat_info->archive_file_size - file->dumped_size);
@@ -398,10 +400,11 @@ sparse_dump_file (int fd, struct tar_stat_info *st)
 	{
 	  size_t i;
 
-	  mv_begin (file.stat_info);
+	  mv_begin_write (file.stat_info->file_name,
+		          file.stat_info->stat.st_size,
+		          file.stat_info->archive_file_size - file.dumped_size);
 	  for (i = 0; rc && i < file.stat_info->sparse_map_avail; i++)
 	    rc = tar_sparse_dump_region (&file, i);
-	  mv_end ();
 	}
     }
 
@@ -508,7 +511,7 @@ check_sparse_region (struct tar_sparse_file *file, off_t beg, off_t end)
 static bool
 check_data_region (struct tar_sparse_file *file, size_t i)
 {
-  size_t size_left;
+  off_t size_left;
 
   if (!lseek_or_error (file, file->stat_info->sparse_map[i].offset))
     return false;
@@ -566,7 +569,7 @@ sparse_diff_file (int fd, struct tar_stat_info *st)
   file.seekable = true; /* File *must* be seekable for compare to work */
 
   rc = tar_sparse_decode_header (&file);
-  mv_begin (st);
+  mv_begin_read (st);
   for (i = 0; rc && i < file.stat_info->sparse_map_avail; i++)
     {
       rc = check_sparse_region (&file,
@@ -588,18 +591,18 @@ sparse_diff_file (int fd, struct tar_stat_info *st)
 /* Old GNU Format. The sparse file information is stored in the
    oldgnu_header in the following manner:
 
-   The header is marked with type 'S'. Its `size' field contains
+   The header is marked with type 'S'. Its 'size' field contains
    the cumulative size of all non-empty blocks of the file. The
-   actual file size is stored in `realsize' member of oldgnu_header.
+   actual file size is stored in 'realsize' member of oldgnu_header.
 
-   The map of the file is stored in a list of `struct sparse'.
+   The map of the file is stored in a list of 'struct sparse'.
    Each struct contains offset to the block of data and its
    size (both as octal numbers). The first file header contains
    at most 4 such structs (SPARSES_IN_OLDGNU_HEADER). If the map
-   contains more structs, then the field `isextended' of the main
-   header is set to 1 (binary) and the `struct sparse_header'
+   contains more structs, then the field 'isextended' of the main
+   header is set to 1 (binary) and the 'struct sparse_header'
    header follows, containing at most 21 following structs
-   (SPARSES_IN_SPARSE_HEADER). If more structs follow, `isextended'
+   (SPARSES_IN_SPARSE_HEADER). If more structs follow, 'isextended'
    field of the extended header is set and next  next extension header
    follows, etc... */
 
@@ -625,8 +628,9 @@ oldgnu_add_sparse (struct tar_sparse_file *file, struct sparse *s)
   if (s->numbytes[0] == '\0')
     return add_finish;
   sp.offset = OFF_FROM_HEADER (s->offset);
-  sp.numbytes = SIZE_FROM_HEADER (s->numbytes);
+  sp.numbytes = OFF_FROM_HEADER (s->numbytes);
   if (sp.offset < 0
+      || sp.offset + sp.numbytes < 0
       || file->stat_info->stat.st_size < sp.offset + sp.numbytes
       || file->stat_info->archive_file_size < 0)
     return add_fail;
@@ -695,8 +699,8 @@ oldgnu_store_sparse_info (struct tar_sparse_file *file, size_t *pindex,
     {
       OFF_TO_CHARS (file->stat_info->sparse_map[*pindex].offset,
 		    sp->offset);
-      SIZE_TO_CHARS (file->stat_info->sparse_map[*pindex].numbytes,
-		     sp->numbytes);
+      OFF_TO_CHARS (file->stat_info->sparse_map[*pindex].numbytes,
+		    sp->numbytes);
     }
 }
 
@@ -1025,8 +1029,11 @@ pax_dump_header_1 (struct tar_sparse_file *file)
   xheader_store ("GNU.sparse.name", file->stat_info, NULL);
   xheader_store ("GNU.sparse.realsize", file->stat_info, NULL);
 
-  file->stat_info->file_name = xheader_format_name (file->stat_info,
-					    "%d/GNUSparseFile.%p/%f", 0);
+  file->stat_info->file_name =
+    xheader_format_name (file->stat_info, "%d/GNUSparseFile.%p/%f", 0);
+  /* Make sure the created header name is shorter than NAME_FIELD_SIZE: */
+  if (strlen (file->stat_info->file_name) > NAME_FIELD_SIZE)
+    file->stat_info->file_name[NAME_FIELD_SIZE] = 0;
 
   blk = start_header (file->stat_info);
   /* Store the effective (shrunken) file size */
@@ -1147,7 +1154,7 @@ pax_decode_header (struct tar_sparse_file *file)
 	    }
 	  sp.offset = u;
 	  COPY_BUF (blk,nbuf,p);
-	  if (!decode_num (&u, nbuf, TYPE_MAXIMUM (size_t)))
+	  if (!decode_num (&u, nbuf, TYPE_MAXIMUM (off_t)))
 	    {
 	      ERROR ((0, 0, _("%s: malformed sparse archive member"),
 		      file->stat_info->orig_file_name));

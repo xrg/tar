@@ -1,7 +1,7 @@
 /* Miscellaneous functions, not really specific to GNU tar.
 
    Copyright (C) 1988, 1992, 1994, 1995, 1996, 1997, 1999, 2000, 2001,
-   2003, 2004, 2005, 2006, 2007, 2009 Free Software Foundation, Inc.
+   2003, 2004, 2005, 2006, 2007, 2009, 2010 Free Software Foundation, Inc.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -21,17 +21,9 @@
 #include <rmt.h>
 #include "common.h"
 #include <quotearg.h>
-#include <save-cwd.h>
 #include <xgetcwd.h>
 #include <unlinkdir.h>
 #include <utimens.h>
-
-#if HAVE_STROPTS_H
-# include <stropts.h>
-#endif
-#if HAVE_SYS_FILIO_H
-# include <sys/filio.h>
-#endif
 
 #ifndef DOUBLE_SLASH_IS_DISTINCT_ROOT
 # define DOUBLE_SLASH_IS_DISTINCT_ROOT 0
@@ -45,10 +37,12 @@
 void
 assign_string (char **string, const char *value)
 {
-  if (*string)
-    free (*string);
+  free (*string);
   *string = value ? xstrdup (value) : 0;
 }
+
+#if 0
+/* This function is currently unused; perhaps it should be removed?  */
 
 /* Allocate a copy of the string quoted as in C, and returns that.  If
    the string does not have to be quoted, it returns a null pointer.
@@ -62,7 +56,7 @@ assign_string (char **string, const char *value)
    when reading directory files.  This means that we can't use
    quotearg, as quotearg is locale-dependent and is meant for human
    consumption.  */
-char *
+static char *
 quote_copy_string (const char *string)
 {
   const char *source = string;
@@ -103,6 +97,7 @@ quote_copy_string (const char *string)
     }
   return 0;
 }
+#endif
 
 /* Takes a quoted C string (like those produced by quote_copy_string)
    and turns it back into the un-quoted original.  This is done in
@@ -110,7 +105,7 @@ quote_copy_string (const char *string)
    completes the unquoting anyway.
 
    This is used for reading the saved directory file in incremental
-   dumps.  It is used for decoding old `N' records (demangling names).
+   dumps.  It is used for decoding old 'N' records (demangling names).
    But also, it is used for decoding file arguments, would they come
    from the shell or a -T file, and for decoding the --exclude
    argument.  */
@@ -233,99 +228,79 @@ zap_slashes (char *name)
   return name;
 }
 
-/* Normalize NAME by resolving any relative references and
-   removing trailing slashes.  Destructive version: modifies its argument. */
-static int
-normalize_filename_x (char *name)
+/* Normalize FILE_NAME by removing redundant slashes and "."
+   components, including redundant trailing slashes.  Leave ".."
+   alone, as it may be significant in the presence of symlinks and on
+   platforms where "/.." != "/".  Destructive version: modifies its
+   argument. */
+static void
+normalize_filename_x (char *file_name)
 {
-  char *p, *q;
+  char *name = file_name + FILE_SYSTEM_PREFIX_LEN (file_name);
+  char *p;
+  char const *q;
+  char c;
 
-  p = name;
-  if (DOUBLE_SLASH_IS_DISTINCT_ROOT && ISSLASH (*p))
-    p++;
+  /* Don't squeeze leading "//" to "/", on hosts where they're distinct.  */
+  name += (DOUBLE_SLASH_IS_DISTINCT_ROOT
+	   && ISSLASH (*name) && ISSLASH (name[1]) && ! ISSLASH (name[2]));
 
-  /* Remove /./, resolve /../ and compress sequences of slashes */
-  for (q = p; *q; )
+  /* Omit redundant leading "." components.  */
+  for (q = p = name; (*p = *q) == '.' && ISSLASH (q[1]); p += !*q)
+    for (q += 2; ISSLASH (*q); q++)
+      continue;
+
+  /* Copy components from Q to P, omitting redundant slashes and
+     internal "."  components.  */
+  while ((*p++ = c = *q++) != '\0')
+    if (ISSLASH (c))
+      while (ISSLASH (q[*q == '.']))
+	q += (*q == '.') + 1;
+
+  /* Omit redundant trailing "." component and slash.  */
+  if (2 < p - name)
     {
-      if (ISSLASH (*q))
-	{
-	  *p++ = *q++;
-	  while (ISSLASH (*q))
-	    q++;
-	  continue;
-	}
-      else if (p == name)
-	{
-	  if (*q == '.')
-	    {
-	      if (ISSLASH (q[1]))
-		{
-		  q += 2;
-		  continue;
-		}
-	      if (q[1] == '.' && ISSLASH (q[2]))
-		return 1;
-	    }
-	}
-      else
-	{
-	  if (*q == '.' && ISSLASH (p[-1]))
-	    {
-	      if (ISSLASH (q[1]))
-		{
-		  q += 2;
-		  while (ISSLASH (*q))
-		    q++;
-		  continue;
-		}
-	      else if (q[1] == '.' && ISSLASH (q[2]))
-		{
-		  do
-		    {
-		      --p;
-		    }
-		  while (p > name && !ISSLASH (p[-1]));
-		  q += 3;
-		  continue;
-		}
-	    }
-	}
-      *p++ = *q++;
+      p -= p[-2] == '.' && ISSLASH (p[-3]);
+      p -= 2 < p - name && ISSLASH (p[-2]);
+      p[-1] = '\0';
     }
-
-  /* Remove trailing slashes */
-  while (p - 1 > name && ISSLASH (p[-1]))
-    p--;
-
-  *p = 0;
-  return 0;
 }
 
-/* Normalize NAME by resolving any relative references, removing trailing
-   slashes, and converting it to absolute file name.  Return the normalized
-   name, or NULL in case of error. */
+/* Normalize NAME by removing redundant slashes and "." components,
+   including redundant trailing slashes.  Return a normalized
+   newly-allocated copy.  */
 
 char *
 normalize_filename (const char *name)
 {
-  char *copy;
+  char *copy = NULL;
 
-  if (name[0] != '/')
+  if (IS_RELATIVE_FILE_NAME (name))
     {
+      /* Set COPY to the absolute file name if possible.
+
+         FIXME: There should be no need to get the absolute file name.
+         getcwd is slow, it might fail, and it does not necessarily
+         return a canonical name even when it succeeds.  Perhaps we
+         can use dev+ino pairs instead of names?  */
       copy = xgetcwd ();
-      copy = xrealloc (copy, strlen (copy) + strlen (name) + 2);
+      if (copy)
+        {
+          size_t copylen = strlen (copy);
+          bool need_separator = ! (DOUBLE_SLASH_IS_DISTINCT_ROOT
+                                   && copylen == 2 && ISSLASH (copy[1]));
+          copy = xrealloc (copy, copylen + need_separator + strlen (name) + 1);
+          copy[copylen] = DIRECTORY_SEPARATOR;
+          strcpy (copy + copylen + need_separator, name);
+        }
+      else
+        WARN ((0, errno, _("Cannot get working directory")));
+    }
 
-      strcat (copy, "/");
-      strcat (copy, name);
-    }
-  else
+  if (! copy)
     copy = xstrdup (name);
-  if (normalize_filename_x (copy))
-    {
-      free (copy);
-      return NULL;
-    }
-  return xrealloc (copy, strlen (copy) + 1);
+  normalize_filename_x (copy);
+  return copy;
 }
 
 
@@ -414,7 +389,7 @@ static char *before_backup_name;
 static char *after_backup_name;
 
 /* Return 1 if FILE_NAME is obviously "." or "/".  */
-static bool
+bool
 must_be_dot_or_slash (char const *file_name)
 {
   file_name += FILE_SYSTEM_PREFIX_LEN (file_name);
@@ -455,7 +430,7 @@ safer_rmdir (const char *file_name)
       return -1;
     }
 
-  return rmdir (file_name);
+  return unlinkat (chdir_fd, file_name, AT_REMOVEDIR);
 }
 
 /* Remove FILE_NAME, returning 1 on success.  If FILE_NAME is a directory,
@@ -475,7 +450,7 @@ remove_any_file (const char *file_name, enum remove_option option)
 
   if (try_unlink_first)
     {
-      if (unlink (file_name) == 0)
+      if (unlinkat (chdir_fd, file_name, 0) == 0)
 	return 1;
 
       /* POSIX 1003.1-2001 requires EPERM when attempting to unlink a
@@ -491,7 +466,7 @@ remove_any_file (const char *file_name, enum remove_option option)
   switch (errno)
     {
     case ENOTDIR:
-      return !try_unlink_first && unlink (file_name) == 0;
+      return !try_unlink_first && unlinkat (chdir_fd, file_name, 0) == 0;
 
     case 0:
     case EEXIST:
@@ -568,7 +543,7 @@ maybe_backup_file (const char *file_name, bool this_is_the_archive)
   if (this_is_the_archive && _remdev (file_name))
     return true;
 
-  if (stat (file_name, &file_stat))
+  if (deref_stat (file_name, &file_stat) != 0)
     {
       if (errno == ENOENT)
 	return true;
@@ -588,7 +563,8 @@ maybe_backup_file (const char *file_name, bool this_is_the_archive)
   if (! after_backup_name)
     xalloc_die ();
 
-  if (rename (before_backup_name, after_backup_name) == 0)
+  if (renameat (chdir_fd, before_backup_name, chdir_fd, after_backup_name)
+      == 0)
     {
       if (verbose_option)
 	fprintf (stdlis, _("Renaming %s to %s\n"),
@@ -615,7 +591,8 @@ undo_last_backup (void)
 {
   if (after_backup_name)
     {
-      if (rename (after_backup_name, before_backup_name) != 0)
+      if (renameat (chdir_fd, after_backup_name, chdir_fd, before_backup_name)
+	  != 0)
 	{
 	  int e = errno;
 	  ERROR ((0, e, _("%s: Cannot rename to %s"),
@@ -630,39 +607,87 @@ undo_last_backup (void)
     }
 }
 
-/* Depending on DEREF, apply either stat or lstat to (NAME, BUF).  */
+/* Apply either stat or lstat to (NAME, BUF), depending on the
+   presence of the --dereference option.  NAME is relative to the
+   most-recent argument to chdir_do.  */
 int
-deref_stat (bool deref, char const *name, struct stat *buf)
+deref_stat (char const *name, struct stat *buf)
 {
-  return deref ? stat (name, buf) : lstat (name, buf);
+  return fstatat (chdir_fd, name, buf, fstatat_flags);
 }
 
-/* Set FD's (i.e., FILE's) access time to TIMESPEC[0].  If that's not
-   possible to do by itself, set its access and data modification
-   times to TIMESPEC[0] and TIMESPEC[1], respectively.  */
-int
-set_file_atime (int fd, char const *file, struct timespec const timespec[2])
+/* Read from FD into the buffer BUF with COUNT bytes.  Attempt to fill
+   BUF.  Wait until input is available; this matters because files are
+   opened O_NONBLOCK for security reasons, and on some file systems
+   this can cause read to fail with errno == EAGAIN.  Return the
+   actual number of bytes read, zero for EOF, or
+   SAFE_READ_ERROR upon error.  */
+size_t
+blocking_read (int fd, void *buf, size_t count)
 {
-#ifdef _FIOSATIME
-  if (0 <= fd)
+  size_t bytes = safe_read (fd, buf, count);
+
+#if defined F_SETFL && O_NONBLOCK
+  if (bytes == SAFE_READ_ERROR && errno == EAGAIN)
     {
-      struct timeval timeval;
-      timeval.tv_sec = timespec[0].tv_sec;
-      timeval.tv_usec = timespec[0].tv_nsec / 1000;
-      if (ioctl (fd, _FIOSATIME, &timeval) == 0)
-	return 0;
+      int flags = fcntl (fd, F_GETFL);
+      if (0 <= flags && flags & O_NONBLOCK
+	  && fcntl (fd, F_SETFL, flags & ~O_NONBLOCK) != -1)
+	bytes = safe_read (fd, buf, count);
     }
 #endif
 
-  return gl_futimens (fd, file, timespec);
+  return bytes;
+}
+
+/* Write to FD from the buffer BUF with COUNT bytes.  Do a full write.
+   Wait until an output buffer is available; this matters because
+   files are opened O_NONBLOCK for security reasons, and on some file
+   systems this can cause write to fail with errno == EAGAIN.  Return
+   the actual number of bytes written, setting errno if that is less
+   than COUNT.  */
+size_t
+blocking_write (int fd, void const *buf, size_t count)
+{
+  size_t bytes = full_write (fd, buf, count);
+
+#if defined F_SETFL && O_NONBLOCK
+  if (bytes < count && errno == EAGAIN)
+    {
+      int flags = fcntl (fd, F_GETFL);
+      if (0 <= flags && flags & O_NONBLOCK
+	  && fcntl (fd, F_SETFL, flags & ~O_NONBLOCK) != -1)
+	{
+	  char const *buffer = buf;
+	  bytes += full_write (fd, buffer + bytes, count - bytes);
+	}
+    }
+#endif
+
+  return bytes;
+}
+
+/* Set FD's (i.e., assuming the working directory is PARENTFD, FILE's)
+   access time to ATIME.  */
+int
+set_file_atime (int fd, int parentfd, char const *file, struct timespec atime)
+{
+  struct timespec ts[2];
+  ts[0] = atime;
+  ts[1].tv_nsec = UTIME_OMIT;
+  return fdutimensat (fd, parentfd, file, ts, fstatat_flags);
 }
 
 /* A description of a working directory.  */
 struct wd
 {
+  /* The directory's name.  */
   char const *name;
-  int saved;
-  struct saved_cwd saved_cwd;
+
+  /* If nonzero, the file descriptor of the directory, or AT_FDCWD if
+     the working directory.  If zero, the directory needs to be opened
+     to be used.  */
+  int fd;
 };
 
 /* A vector of chdir targets.  wd[0] is the initial working directory.  */
@@ -674,8 +699,21 @@ static size_t wd_count;
 /* The allocated size of the vector.  */
 static size_t wd_alloc;
 
+/* The maximum number of chdir targets with open directories.
+   Don't make it too large, as many operating systems have a small
+   limit on the number of open file descriptors.  Also, the current
+   implementation does not scale well.  */
+enum { CHDIR_CACHE_SIZE = 16 };
+
+/* Indexes into WD of chdir targets with open file descriptors, sorted
+   most-recently used first.  Zero indexes are unused.  */
+static int wdcache[CHDIR_CACHE_SIZE];
+
+/* Number of nonzero entries in WDCACHE.  */
+static size_t wdcache_count;
+
 int
-chdir_count ()
+chdir_count (void)
 {
   if (wd_count == 0)
     return wd_count;
@@ -700,7 +738,7 @@ chdir_arg (char const *dir)
       if (! wd_count)
 	{
 	  wd[wd_count].name = ".";
-	  wd[wd_count].saved = 0;
+	  wd[wd_count].fd = AT_FDCWD;
 	  wd_count++;
 	}
     }
@@ -717,64 +755,76 @@ chdir_arg (char const *dir)
     }
 
   wd[wd_count].name = dir;
-  wd[wd_count].saved = 0;
+  wd[wd_count].fd = 0;
   return wd_count++;
 }
 
-/* Change to directory I.  If I is 0, change to the initial working
-   directory; otherwise, I must be a value returned by chdir_arg.  */
+/* Index of current directory.  */
+int chdir_current;
+
+/* Value suitable for use as the first argument to openat, and in
+   similar locations for fstatat, etc.  This is an open file
+   descriptor, or AT_FDCWD if the working directory is current.  It is
+   valid until the next invocation of chdir_do.  */
+int chdir_fd = AT_FDCWD;
+
+/* Change to directory I, in a virtual way.  This does not actually
+   invoke chdir; it merely sets chdir_fd to an int suitable as the
+   first argument for openat, etc.  If I is 0, change to the initial
+   working directory; otherwise, I must be a value returned by
+   chdir_arg.  */
 void
 chdir_do (int i)
 {
-  static int previous;
-
-  if (previous != i)
+  if (chdir_current != i)
     {
-      struct wd *prev = &wd[previous];
       struct wd *curr = &wd[i];
+      int fd = curr->fd;
 
-      if (! prev->saved)
+      if (! fd)
 	{
-	  int err = 0;
-	  prev->saved = 1;
-	  if (save_cwd (&prev->saved_cwd) != 0)
-	    err = errno;
-	  else if (0 <= prev->saved_cwd.desc)
-	    {
-	      /* Make sure we still have at least one descriptor available.  */
-	      int fd1 = prev->saved_cwd.desc;
-	      int fd2 = dup (fd1);
-	      if (0 <= fd2)
-		close (fd2);
-	      else if (errno == EMFILE)
-		{
-		  /* Force restore_cwd to use chdir_long.  */
-		  close (fd1);
-		  prev->saved_cwd.desc = -1;
-		  prev->saved_cwd.name = xgetcwd ();
-		}
-	      else
-		err = errno;
-	    }
-
-	  if (err)
-	    FATAL_ERROR ((0, err, _("Cannot save working directory")));
-	}
-
-      if (curr->saved)
-	{
-	  if (restore_cwd (&curr->saved_cwd))
-	    FATAL_ERROR ((0, 0, _("Cannot change working directory")));
-	}
-      else
-	{
-	  if (i && ! ISSLASH (curr->name[0]))
+	  if (! IS_ABSOLUTE_FILE_NAME (curr->name))
 	    chdir_do (i - 1);
-	  if (chdir (curr->name) != 0)
-	    chdir_fatal (curr->name);
+	  fd = openat (chdir_fd, curr->name,
+		       open_searchdir_flags & ~ O_NOFOLLOW);
+	  if (fd < 0)
+	    open_fatal (curr->name);
+
+	  curr->fd = fd;
+
+	  /* Add I to the cache, tossing out the lowest-ranking entry if the
+	     cache is full.  */
+	  if (wdcache_count < CHDIR_CACHE_SIZE)
+	    wdcache[wdcache_count++] = i;
+	  else
+	    {
+	      struct wd *stale = &wd[wdcache[CHDIR_CACHE_SIZE - 1]];
+	      if (close (stale->fd) != 0)
+		close_diag (stale->name);
+	      stale->fd = 0;
+	      wdcache[CHDIR_CACHE_SIZE - 1] = i;
+	    }
 	}
 
-      previous = i;
+      if (0 < fd)
+	{
+	  /* Move the i value to the front of the cache.  This is
+	     O(CHDIR_CACHE_SIZE), but the cache is small.  */
+	  size_t ci;
+	  int prev = wdcache[0];
+	  for (ci = 1; prev != i; ci++)
+	    {
+	      int cur = wdcache[ci];
+	      wdcache[ci] = prev;
+	      if (cur == i)
+		break;
+	      prev = cur;
+	    }
+	  wdcache[0] = i;
+	}
+
+      chdir_current = i;
+      chdir_fd = fd;
     }
 }
 
@@ -857,21 +907,6 @@ file_removed_diag (const char *name, bool top_level,
 }
 
 void
-dir_removed_diag (const char *name, bool top_level,
-		   void (*diagfn) (char const *name))
-{
-  if (!top_level && errno == ENOENT)
-    {
-      WARNOPT (WARN_FILE_REMOVED,
-	       (0, 0, _("%s: Directory removed before we read it"),
-		quotearg_colon (name)));
-      set_exit_status (TAREXIT_DIFFERS);
-    }
-  else
-    diagfn (name);
-}
-
-void
 write_fatal_details (char const *name, ssize_t status, size_t size)
 {
   write_error_details (name, status, size);
@@ -927,7 +962,7 @@ page_aligned_alloc (void **ptr, size_t size)
 
 struct namebuf
 {
-  char *buffer;		/* directory, `/', and directory member */
+  char *buffer;		/* directory, '/', and directory member */
   size_t buffer_size;	/* allocated size of name_buffer */
   size_t dir_length;	/* length of directory part in buffer */
 };

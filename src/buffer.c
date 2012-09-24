@@ -77,7 +77,6 @@ static bool read_full_records = false;
 /* We're reading, but we just read the last block and it's time to update.
    Declared in update.c
 
-   As least EXTERN like this one as possible. (?? --gray)
    FIXME: Either eliminate it or move it to common.h.
 */
 extern bool time_to_start_writing;
@@ -101,56 +100,122 @@ static int global_volno = 1;    /* volume number to print in external
 
 bool write_archive_to_stdout;
 
-/* Used by flush_read and flush_write to store the real info about saved
-   names.  */
-static char *real_s_name;
-static off_t real_s_totsize;
-static off_t real_s_sizeleft;
-
 
 /* Multi-volume tracking support */
-static char *save_name;         /* name of the file we are currently writing */
-static off_t save_totsize;      /* total size of file we are writing, only
-                                   valid if save_name is nonzero */
-static off_t save_sizeleft;     /* where we are in the file we are writing,
-                                   only valid if save_name is nonzero */
+
+/* When creating a multi-volume archive, each 'bufmap' represents
+   a member stored (perhaps partly) in the current record buffer.
+   After flushing the record to the output media, all bufmaps that
+   represent fully written members are removed from the list, then
+   the sizeleft and start numbers in the remaining bufmaps are updated.
+
+   When reading from a multi-volume archive, the list degrades to a
+   single element, which keeps information about the member currently
+   being read.
+*/
+
+struct bufmap
+{
+  struct bufmap *next;          /* Pointer to the next map entry */
+  size_t start;                 /* Offset of the first data block */
+  char *file_name;              /* Name of the stored file */
+  off_t sizetotal;              /* Size of the stored file */
+  off_t sizeleft;               /* Size left to read/write */
+};
+static struct bufmap *bufmap_head, *bufmap_tail;
+
+/* This variable, when set, inhibits updating the bufmap chain after
+   a write.  This is necessary when writing extended POSIX headers. */
+static int inhibit_map;
+
+void
+mv_begin_write (const char *file_name, off_t totsize, off_t sizeleft)
+{
+  if (multi_volume_option)
+    {
+      struct bufmap *bp = xmalloc (sizeof bp[0]);
+      if (bufmap_tail)
+	bufmap_tail->next = bp;
+      else
+	bufmap_head = bp;
+      bufmap_tail = bp;
+
+      bp->next = NULL;
+      bp->start = current_block - record_start;
+      bp->file_name = xstrdup (file_name);
+      bp->sizetotal = totsize;
+      bp->sizeleft = sizeleft;
+    }
+}
+
+static struct bufmap *
+bufmap_locate (size_t off)
+{
+  struct bufmap *map;
+
+  for (map = bufmap_head; map; map = map->next)
+    {
+      if (!map->next
+	  || off < map->next->start * BLOCKSIZE)
+	break;
+    }
+  return map;
+}
+
+static void
+bufmap_free (struct bufmap *mark)
+{
+  struct bufmap *map;
+  for (map = bufmap_head; map && map != mark; )
+    {
+      struct bufmap *next = map->next;
+      free (map->file_name);
+      free (map);
+      map = next;
+    }
+  bufmap_head = map;
+  if (!bufmap_head)
+    bufmap_tail = bufmap_head;
+}
+
+static void
+bufmap_reset (struct bufmap *map, ssize_t fixup)
+{
+  bufmap_free (map);
+  if (map)
+    {
+      for (; map; map = map->next)
+	map->start += fixup;
+    }
+}
 
 
 static struct tar_stat_info dummy;
 
 void
-buffer_write_global_xheader ()
+buffer_write_global_xheader (void)
 {
   xheader_write_global (&dummy.xhdr);
 }
 
 void
-mv_begin (struct tar_stat_info *st)
+mv_begin_read (struct tar_stat_info *st)
 {
-  if (multi_volume_option)
-    {
-      assign_string (&save_name,  st->orig_file_name);
-      save_totsize = save_sizeleft = st->stat.st_size;
-    }
+  mv_begin_write (st->orig_file_name, st->stat.st_size, st->stat.st_size);
 }
 
 void
-mv_end ()
+mv_end (void)
 {
   if (multi_volume_option)
-    assign_string (&save_name, 0);
-}
-
-void
-mv_total_size (off_t size)
-{
-  save_totsize = size;
+    bufmap_free (NULL);
 }
 
 void
 mv_size_left (off_t size)
 {
-  save_sizeleft = size;
+  if (bufmap_head)
+    bufmap_head->sizeleft = size;
 }
 
 
@@ -168,7 +233,7 @@ clear_read_error_count (void)
 double duration;
 
 void
-set_start_time ()
+set_start_time (void)
 {
   gettime (&start_time);
   volume_start_time = start_time;
@@ -183,7 +248,7 @@ set_volume_start_time (void)
 }
 
 void
-compute_duration ()
+compute_duration (void)
 {
   struct timespec now;
   gettime (&now);
@@ -196,8 +261,8 @@ compute_duration ()
 /* Compression detection */
 
 enum compress_type {
-  ct_tar,              /* Plain tar file */
   ct_none,             /* Unknown compression type */
+  ct_tar,              /* Plain tar file */
   ct_compress,
   ct_gzip,
   ct_bzip2,
@@ -207,31 +272,102 @@ enum compress_type {
   ct_xz
 };
 
+static enum compress_type archive_compression_type = ct_none;
+
 struct zip_magic
 {
   enum compress_type type;
   size_t length;
   char const *magic;
+};
+
+struct zip_program
+{
+  enum compress_type type;
   char const *program;
   char const *option;
 };
 
 static struct zip_magic const magic[] = {
-  { ct_tar },
   { ct_none, },
-  { ct_compress, 2, "\037\235",  COMPRESS_PROGRAM, "-Z" },
-  { ct_gzip,     2, "\037\213",  GZIP_PROGRAM,     "-z"  },
-  { ct_bzip2,    3, "BZh",       BZIP2_PROGRAM,    "-j" },
-  { ct_lzip,     4, "LZIP",      LZIP_PROGRAM,     "--lzip" },
-  { ct_lzma,     6, "\xFFLZMA",  LZMA_PROGRAM,     "--lzma" },
-  { ct_lzop,     4, "\211LZO",   LZOP_PROGRAM,     "--lzop" },
-  { ct_xz,       6, "\xFD" "7zXZ",  XZ_PROGRAM,       "-J" },
+  { ct_tar },
+  { ct_compress, 2, "\037\235" },
+  { ct_gzip,     2, "\037\213" },
+  { ct_bzip2,    3, "BZh" },
+  { ct_lzip,     4, "LZIP" },
+  { ct_lzma,     6, "\xFFLZMA" },
+  { ct_lzop,     4, "\211LZO" },
+  { ct_xz,       6, "\xFD" "7zXZ" },
 };
 
 #define NMAGIC (sizeof(magic)/sizeof(magic[0]))
 
-#define compress_option(t) magic[t].option
-#define compress_program(t) magic[t].program
+static struct zip_program zip_program[] = {
+  { ct_compress, COMPRESS_PROGRAM, "-Z" },
+  { ct_compress, GZIP_PROGRAM,     "-z" },
+  { ct_gzip,     GZIP_PROGRAM,     "-z" },
+  { ct_bzip2,    BZIP2_PROGRAM,    "-j" },
+  { ct_bzip2,    "lbzip2",         "-j" },
+  { ct_lzip,     LZIP_PROGRAM,     "--lzip" },
+  { ct_lzma,     LZMA_PROGRAM,     "--lzma" },
+  { ct_lzma,     XZ_PROGRAM,       "-J" },
+  { ct_lzop,     LZOP_PROGRAM,     "--lzop" },
+  { ct_xz,       XZ_PROGRAM,       "-J" },
+  { ct_none }
+};
+
+static struct zip_program const *
+find_zip_program (enum compress_type type, int *pstate)
+{
+  int i;
+
+  for (i = *pstate; zip_program[i].type != ct_none; i++)
+    {
+      if (zip_program[i].type == type)
+	{
+	  *pstate = i + 1;
+	  return zip_program + i;
+	}
+    }
+  *pstate = i;
+  return NULL;
+}
+
+const char *
+first_decompress_program (int *pstate)
+{
+  struct zip_program const *zp;
+
+  if (use_compress_program_option)
+    return use_compress_program_option;
+
+  if (archive_compression_type == ct_none)
+    return NULL;
+
+  *pstate = 0;
+  zp = find_zip_program (archive_compression_type, pstate);
+  return zp ? zp->program : NULL;
+}
+
+const char *
+next_decompress_program (int *pstate)
+{
+  struct zip_program const *zp;
+
+  if (use_compress_program_option)
+    return NULL;
+  zp = find_zip_program (archive_compression_type, pstate);
+  return zp ? zp->program : NULL;
+}
+
+static const char *
+compress_option (enum compress_type type)
+{
+  struct zip_program const *zp;
+  int i = 0;
+  zp = find_zip_program (type, &i);
+  return zp ? zp->option : NULL;
+}
 
 /* Check if the file ARCHIVE is a compressed archive. */
 static enum compress_type
@@ -324,13 +460,13 @@ open_compressed_archive (void)
             case ct_none:
               if (shortfile)
                 ERROR ((0, 0, _("This does not look like a tar archive")));
-              set_comression_program_by_suffix (archive_name_array[0], NULL);
+              set_compression_program_by_suffix (archive_name_array[0], NULL);
               if (!use_compress_program_option)
 		return archive;
               break;
 
             default:
-              use_compress_program_option = compress_program (type);
+              archive_compression_type = type;
               break;
             }
         }
@@ -373,7 +509,7 @@ print_stats (FILE *fp, const char *text, tarlong numbytes)
 }
 
 void
-print_total_stats ()
+print_total_stats (void)
 {
   switch (subcommand_option)
     {
@@ -511,8 +647,6 @@ _open_archive (enum access_mode wanted_access)
     FATAL_ERROR ((0, 0, _("No archive name given")));
 
   tar_stat_destroy (&current_stat_info);
-  save_name = 0;
-  real_s_name = 0;
 
   record_index = 0;
   init_buffer ();
@@ -673,6 +807,20 @@ _flush_write (void)
   else
     status = sys_write_archive_buffer ();
 
+  if (status && multi_volume_option && !inhibit_map)
+    {
+      struct bufmap *map = bufmap_locate (status);
+      if (map)
+	{
+	  size_t delta = status - map->start * BLOCKSIZE;
+	  if (delta > map->sizeleft)
+	    delta = map->sizeleft;
+	  map->sizeleft -= delta;
+	  if (map->sizeleft == 0)
+	    map = map->next;
+	  bufmap_reset (map, map ? (- map->start) : 0);
+	}
+    }
   return status;
 }
 
@@ -907,12 +1055,9 @@ close_archive (void)
   sys_wait_for_child (child_pid, hit_eof);
 
   tar_stat_destroy (&current_stat_info);
-  if (save_name)
-    free (save_name);
-  if (real_s_name)
-    free (real_s_name);
   free (record_buffer[0]);
   free (record_buffer[1]);
+  bufmap_free (NULL);
 }
 
 /* Called to initialize the global volume number.  */
@@ -1280,30 +1425,30 @@ try_new_volume (void)
       break;
     }
 
-  if (real_s_name)
+  if (bufmap_head)
     {
       uintmax_t s;
       if (!continued_file_name
-          || strcmp (continued_file_name, real_s_name))
+          || strcmp (continued_file_name, bufmap_head->file_name))
         {
           if ((archive_format == GNU_FORMAT || archive_format == OLDGNU_FORMAT)
-              && strlen (real_s_name) >= NAME_FIELD_SIZE
-              && strncmp (continued_file_name, real_s_name,
+              && strlen (bufmap_head->file_name) >= NAME_FIELD_SIZE
+              && strncmp (continued_file_name, bufmap_head->file_name,
                           NAME_FIELD_SIZE) == 0)
             WARN ((0, 0,
  _("%s is possibly continued on this volume: header contains truncated name"),
-                   quote (real_s_name)));
+                   quote (bufmap_head->file_name)));
           else
             {
               WARN ((0, 0, _("%s is not continued on this volume"),
-                     quote (real_s_name)));
+                     quote (bufmap_head->file_name)));
               return false;
             }
         }
 
       s = continued_file_size + continued_file_offset;
 
-      if (real_s_totsize != s || s < continued_file_offset)
+      if (bufmap_head->sizetotal != s || s < continued_file_offset)
         {
           char totsizebuf[UINTMAX_STRSIZE_BOUND];
           char s1buf[UINTMAX_STRSIZE_BOUND];
@@ -1311,21 +1456,22 @@ try_new_volume (void)
 
           WARN ((0, 0, _("%s is the wrong size (%s != %s + %s)"),
                  quote (continued_file_name),
-                 STRINGIFY_BIGINT (save_totsize, totsizebuf),
+                 STRINGIFY_BIGINT (bufmap_head->sizetotal, totsizebuf),
                  STRINGIFY_BIGINT (continued_file_size, s1buf),
                  STRINGIFY_BIGINT (continued_file_offset, s2buf)));
           return false;
         }
 
-      if (real_s_totsize - real_s_sizeleft != continued_file_offset)
+      if (bufmap_head->sizetotal - bufmap_head->sizeleft !=
+	  continued_file_offset)
         {
           char totsizebuf[UINTMAX_STRSIZE_BOUND];
           char s1buf[UINTMAX_STRSIZE_BOUND];
           char s2buf[UINTMAX_STRSIZE_BOUND];
 
           WARN ((0, 0, _("This volume is out of sequence (%s - %s != %s)"),
-                 STRINGIFY_BIGINT (real_s_totsize, totsizebuf),
-                 STRINGIFY_BIGINT (real_s_sizeleft, s1buf),
+                 STRINGIFY_BIGINT (bufmap_head->sizetotal, totsizebuf),
+                 STRINGIFY_BIGINT (bufmap_head->sizeleft, s1buf),
                  STRINGIFY_BIGINT (continued_file_offset, s2buf)));
 
           return false;
@@ -1477,26 +1623,24 @@ add_volume_label (void)
 }
 
 static void
-add_chunk_header (void)
+add_chunk_header (struct bufmap *map)
 {
   if (archive_format == POSIX_FORMAT)
     {
       off_t block_ordinal;
       union block *blk;
       struct tar_stat_info st;
-      static size_t real_s_part_no; /* FIXME */
 
-      real_s_part_no++;
       memset (&st, 0, sizeof st);
-      st.orig_file_name = st.file_name = real_s_name;
+      st.orig_file_name = st.file_name = map->file_name;
       st.stat.st_mode = S_IFREG|S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH;
       st.stat.st_uid = getuid ();
       st.stat.st_gid = getgid ();
       st.orig_file_name = xheader_format_name (&st,
                                                "%d/GNUFileParts.%p/%f.%n",
-                                               real_s_part_no);
+                                               volno);
       st.file_name = st.orig_file_name;
-      st.archive_file_size = st.stat.st_size = real_s_sizeleft;
+      st.archive_file_size = st.stat.st_size = map->sizeleft;
 
       block_ordinal = current_block_ordinal ();
       blk = start_header (&st);
@@ -1520,27 +1664,23 @@ write_volume_label (void)
 
 /* Write GNU multi-volume header */
 static void
-gnu_add_multi_volume_header (void)
+gnu_add_multi_volume_header (struct bufmap *map)
 {
   int tmp;
   union block *block = find_next_block ();
 
-  if (strlen (real_s_name) > NAME_FIELD_SIZE)
+  if (strlen (map->file_name) > NAME_FIELD_SIZE)
     WARN ((0, 0,
            _("%s: file name too long to be stored in a GNU multivolume header, truncated"),
-           quotearg_colon (real_s_name)));
+           quotearg_colon (map->file_name)));
 
   memset (block, 0, BLOCKSIZE);
 
-  /* FIXME: Michael P Urban writes: [a long name file] is being written
-     when a new volume rolls around [...]  Looks like the wrong value is
-     being preserved in real_s_name, though.  */
-
-  strncpy (block->header.name, real_s_name, NAME_FIELD_SIZE);
+  strncpy (block->header.name, map->file_name, NAME_FIELD_SIZE);
   block->header.typeflag = GNUTYPE_MULTIVOL;
 
-  OFF_TO_CHARS (real_s_sizeleft, block->header.size);
-  OFF_TO_CHARS (real_s_totsize - real_s_sizeleft,
+  OFF_TO_CHARS (map->sizeleft, block->header.size);
+  OFF_TO_CHARS (map->sizetotal - map->sizeleft,
                 block->oldgnu_header.offset);
 
   tmp = verbose_option;
@@ -1553,40 +1693,17 @@ gnu_add_multi_volume_header (void)
 /* Add a multi volume header to the current archive. The exact header format
    depends on the archive format. */
 static void
-add_multi_volume_header (void)
+add_multi_volume_header (struct bufmap *map)
 {
   if (archive_format == POSIX_FORMAT)
     {
-      off_t d = real_s_totsize - real_s_sizeleft;
-      xheader_store ("GNU.volume.filename", &dummy, real_s_name);
-      xheader_store ("GNU.volume.size", &dummy, &real_s_sizeleft);
+      off_t d = map->sizetotal - map->sizeleft;
+      xheader_store ("GNU.volume.filename", &dummy, map->file_name);
+      xheader_store ("GNU.volume.size", &dummy, &map->sizeleft);
       xheader_store ("GNU.volume.offset", &dummy, &d);
     }
   else
-    gnu_add_multi_volume_header ();
-}
-
-/* Synchronize multi-volume globals */
-static void
-multi_volume_sync (void)
-{
-  if (multi_volume_option)
-    {
-      if (save_name)
-        {
-          assign_string (&real_s_name,
-                         safer_name_suffix (save_name, false,
-                                            absolute_names_option));
-          real_s_totsize = save_totsize;
-          real_s_sizeleft = save_sizeleft;
-        }
-      else
-        {
-          assign_string (&real_s_name, 0);
-          real_s_totsize = 0;
-          real_s_sizeleft = 0;
-        }
-    }
+    gnu_add_multi_volume_header (map);
 }
 
 
@@ -1673,8 +1790,6 @@ _gnu_flush_read (void)
         archive_write_error (status);
     }
 
-  multi_volume_sync ();
-
   for (;;)
     {
       status = rmtread (archive, record_start->buffer, record_size);
@@ -1726,7 +1841,7 @@ _gnu_flush_write (size_t buffer_level)
   char *copy_ptr;
   size_t copy_size;
   size_t bufsize;
-  tarlong wrt;
+  struct bufmap *map;
 
   status = _flush_write ();
   if (status != record_size && !multi_volume_option)
@@ -1740,9 +1855,10 @@ _gnu_flush_write (size_t buffer_level)
 
   if (status == record_size)
     {
-      multi_volume_sync ();
       return;
     }
+
+  map = bufmap_locate (status);
 
   if (status % BLOCKSIZE)
     {
@@ -1755,7 +1871,6 @@ _gnu_flush_write (size_t buffer_level)
   if (status < 0 && errno != ENOSPC && errno != EIO && errno != ENXIO)
     archive_write_error (status);
 
-  real_s_sizeleft -= status;
   if (!new_volume (ACCESS_WRITE))
     return;
 
@@ -1772,20 +1887,23 @@ _gnu_flush_write (size_t buffer_level)
   record_index = !record_index;
   init_buffer ();
 
+  inhibit_map = 1;
+
   if (volume_label_option)
     add_volume_label ();
 
-  if (real_s_name)
-    add_multi_volume_header ();
+  if (map)
+    add_multi_volume_header (map);
 
   write_extended (true, &dummy, find_next_block ());
   tar_stat_destroy (&dummy);
 
-  if (real_s_name)
-    add_chunk_header ();
-  wrt = bytes_written;
+  if (map)
+    add_chunk_header (map);
   header = find_next_block ();
+  bufmap_reset (map, header - record_start);
   bufsize = available_space_after (header);
+  inhibit_map = 0;
   while (bufsize < copy_size)
     {
       memcpy (header->buffer, copy_ptr, bufsize);
@@ -1798,16 +1916,6 @@ _gnu_flush_write (size_t buffer_level)
   memcpy (header->buffer, copy_ptr, copy_size);
   memset (header->buffer + copy_size, 0, bufsize - copy_size);
   set_next_block_after (header + (copy_size - 1) / BLOCKSIZE);
-  if (multi_volume_option && wrt < bytes_written)
-    {
-      /* The value of bytes_written has changed while moving data;
-         that means that flush_archive was executed at least once in
-         between, and, as a consequence, copy_size bytes were not written
-         to disk.  We need to update sizeleft variables to compensate for
-         that. */
-      save_sizeleft += copy_size;
-      multi_volume_sync ();
-    }
   find_next_block ();
 }
 
@@ -1820,13 +1928,13 @@ gnu_flush_write (size_t buffer_level)
 }
 
 void
-flush_read ()
+flush_read (void)
 {
   flush_read_ptr ();
 }
 
 void
-flush_write ()
+flush_write (void)
 {
   flush_write_ptr (record_size);
 }

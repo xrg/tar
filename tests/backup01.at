@@ -1,7 +1,7 @@
 # Process this file with autom4te to create testsuite. -*- Autotest -*-
 
 # Test suite for GNU tar.
-# Copyright (C) 2009 Free Software Foundation, Inc.
+# Copyright (C) 2009-2010 Free Software Foundation, Inc.
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -34,15 +34,16 @@ AT_SETUP([extracting existing dir with --backup])
 AT_KEYWORDS([extract backup backup01])
 
 AT_TAR_CHECK([
+unset VERSION_CONTROL
 mkdir dir1 dir2
 echo bla > dir1/file1
 tar cf test.tar dir1 dir2
-tar xfv test.tar --backup
+tar xfv test.tar --backup --warning=no-timestamp
 ],
 [0],
 [dir1/
 dir1/file1
-Renaming `dir1/file1' to `dir1/file1~'
+Renaming 'dir1/file1' to 'dir1/file1~'
 dir2/
 ])
 

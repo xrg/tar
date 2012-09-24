@@ -40,7 +40,7 @@ tar -c -M -L 502 -f a.tar -f b.tar -f c.tar m4_foreach([f],[FILELIST],f )
 echo separator
 mkdir bak
 mv m4_foreach([f],[FILELIST],f )bak
-tar -vxM -f a.tar -f c.tar -f b.tar -f c.tar 
+tar -vxM -f a.tar -f c.tar -f b.tar -f c.tar
 m4_foreach([f],
   [FILELIST],
   [echo Diffing f
@@ -58,10 +58,7 @@ m4_foreach([file],
   [Diffing file
 ])dnl
 ,
-[tar: `trzy' is not continued on this volume
+[tar: 'trzy' is not continued on this volume
 ],[],[], [gnu])
 
 AT_CLEANUP
-
-
-

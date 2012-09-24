@@ -43,7 +43,7 @@
 #include <closeout.h>
 #include <configmake.h>
 #include <exitfail.h>
-#include <getdate.h>
+#include <parse-datetime.h>
 #include <rmt.h>
 #include <rmt-command.h>
 #include <prepargs.h>
@@ -74,11 +74,11 @@
 static const char *stdin_used_by;
 
 /* Doesn't return if stdin already requested.  */
-void
+static void
 request_stdin (const char *option)
 {
   if (stdin_used_by)
-    USAGE_ERROR ((0, 0, _("Options `-%s' and `-%s' both want standard input"),
+    USAGE_ERROR ((0, 0, _("Options '-%s' and '-%s' both want standard input"),
 		  stdin_used_by, option));
 
   stdin_used_by = option;
@@ -247,7 +247,7 @@ tar_set_quoting_style (char *arg)
 	return;
       }
   FATAL_ERROR ((0, 0,
-		_("Unknown quoting style `%s'. Try `%s --quoting-style=help' to get a list."), arg, program_invocation_short_name));
+		_("Unknown quoting style '%s'. Try '%s --quoting-style=help' to get a list."), arg, program_invocation_short_name));
 }
 
 
@@ -330,6 +330,7 @@ enum
   SHOW_DEFAULTS_OPTION,
   SHOW_OMITTED_DIRS_OPTION,
   SHOW_TRANSFORMED_NAMES_OPTION,
+  SKIP_OLD_FILES_OPTION,
   SPARSE_VERSION_OPTION,
   STRIP_COMPONENTS_OPTION,
   SUFFIX_OPTION,
@@ -348,7 +349,7 @@ enum
 const char *argp_program_version = "tar (" PACKAGE_NAME ") " VERSION;
 const char *argp_program_bug_address = "<" PACKAGE_BUGREPORT ">";
 static char const doc[] = N_("\
-GNU `tar' saves many files together into a single tape or disk archive, \
+GNU 'tar' saves many files together into a single tape or disk archive, \
 and can restore individual files from the archive.\n\
 \n\
 Examples:\n\
@@ -356,7 +357,7 @@ Examples:\n\
   tar -tvf archive.tar         # List all files in archive.tar verbosely.\n\
   tar -xf archive.tar          # Extract all files from archive.tar.\n")
 "\v"
-N_("The backup suffix is `~', unless set with --suffix or SIMPLE_BACKUP_SUFFIX.\n\
+N_("The backup suffix is '~', unless set with --suffix or SIMPLE_BACKUP_SUFFIX.\n\
 The version control may be set with --backup or VERSION_CONTROL, values are:\n\n\
   none, off       never make backups\n\
   t, numbered     make numbered backups\n\
@@ -454,7 +455,11 @@ static struct argp_option options[] = {
   {"remove-files", REMOVE_FILES_OPTION, 0, 0,
    N_("remove files after adding them to the archive"), GRID+1 },
   {"keep-old-files", 'k', 0, 0,
-   N_("don't replace existing files when extracting"), GRID+1 },
+   N_("don't replace existing files when extracting, "
+      "treat them as errors"), GRID+1 },
+  {"skip-old-files", SKIP_OLD_FILES_OPTION, 0, 0,
+   N_("don't replace existing files when extracting, silently skip over them"),
+   GRID+1 },
   {"keep-newer-files", KEEP_NEWER_FILES_OPTION, 0, 0,
    N_("don't replace existing files that are newer than their archive copies"), GRID+1 },
   {"overwrite", OVERWRITE_OPTION, 0, 0,
@@ -540,7 +545,7 @@ static struct argp_option options[] = {
   {"rsh-command", RSH_COMMAND_OPTION, N_("COMMAND"), 0,
    N_("use remote COMMAND instead of rsh"), GRID+1 },
 #ifdef DEVICE_PREFIX
-  {"-[0-7][lmh]", 0, NULL, OPTION_DOC, /* It is OK, since `name' will never be
+  {"-[0-7][lmh]", 0, NULL, OPTION_DOC, /* It is OK, since 'name' will never be
 					  translated */
    N_("specify drive and density"), GRID+1 },
 #endif
@@ -686,7 +691,7 @@ static struct argp_option options[] = {
   {"recursion", RECURSION_OPTION, 0, 0,
    N_("recurse into directories (default)"), GRID+1 },
   {"absolute-names", 'P', 0, 0,
-   N_("don't strip leading `/'s from file names"), GRID+1 },
+   N_("don't strip leading '/'s from file names"), GRID+1 },
   {"dereference", 'h', 0, 0,
    N_("follow symlinks; archive and dump the files they point to"), GRID+1 },
   {"hard-dereference", HARD_DEREFERENCE_OPTION, 0, 0,
@@ -724,7 +729,7 @@ static struct argp_option options[] = {
   {"anchored", ANCHORED_OPTION, 0, 0,
    N_("patterns match file name start"), GRID+1 },
   {"no-anchored", NO_ANCHORED_OPTION, 0, 0,
-   N_("patterns match after any `/' (default for exclusion)"), GRID+1 },
+   N_("patterns match after any '/' (default for exclusion)"), GRID+1 },
   {"no-ignore-case", NO_IGNORE_CASE_OPTION, 0, 0,
    N_("case sensitive matching (default)"), GRID+1 },
   {"wildcards", WILDCARDS_OPTION, 0, 0,
@@ -732,9 +737,9 @@ static struct argp_option options[] = {
   {"no-wildcards", NO_WILDCARDS_OPTION, 0, 0,
    N_("verbatim string matching"), GRID+1 },
   {"no-wildcards-match-slash", NO_WILDCARDS_MATCH_SLASH_OPTION, 0, 0,
-   N_("wildcards do not match `/'"), GRID+1 },
+   N_("wildcards do not match '/'"), GRID+1 },
   {"wildcards-match-slash", WILDCARDS_MATCH_SLASH_OPTION, 0, 0,
-   N_("wildcards match `/' (default for exclusion)"), GRID+1 },
+   N_("wildcards match '/' (default for exclusion)"), GRID+1 },
 #undef GRID
 
 #define GRID 130
@@ -898,12 +903,12 @@ static char const * const backup_file_table[] = {
 };
 
 static void
-add_exclude_array (char const * const * fv)
+add_exclude_array (char const * const * fv, int opts)
 {
   int i;
 
   for (i = 0; fv[i]; i++)
-    add_exclude (global_excluded, fv[i], 0);
+    add_exclude (global_excluded, fv[i], opts);
 }
 
 
@@ -933,7 +938,7 @@ set_subcommand_option (enum subcommand subcommand)
   if (subcommand_option != UNKNOWN_SUBCOMMAND
       && subcommand_option != subcommand)
     USAGE_ERROR ((0, 0,
-		  _("You may not specify more than one `-Acdtrux' or `--test-label' option")));
+		  _("You may not specify more than one '-Acdtrux' or '--test-label' option")));
 
   subcommand_option = subcommand;
 }
@@ -962,10 +967,13 @@ static void
 stat_on_signal (int signo)
 {
 #ifdef HAVE_SIGACTION
+# ifndef SA_RESTART
+#  define SA_RESTART 0
+# endif
   struct sigaction act;
   act.sa_handler = sigstat;
   sigemptyset (&act.sa_mask);
-  act.sa_flags = 0;
+  act.sa_flags = SA_RESTART;
   sigaction (signo, &act, NULL);
 #else
   signal (signo, sigstat);
@@ -1020,7 +1028,7 @@ get_date_or_file (struct tar_args *args, const char *option,
       || *str == '.')
     {
       struct stat st;
-      if (deref_stat (dereference_option, str, &st) != 0)
+      if (stat (str, &st) != 0)
 	{
 	  stat_error (str);
 	  USAGE_ERROR ((0, 0, _("Date sample file not found")));
@@ -1029,7 +1037,7 @@ get_date_or_file (struct tar_args *args, const char *option,
     }
   else
     {
-      if (! get_date (ts, str, NULL))
+      if (! parse_datetime (ts, str, NULL))
 	{
 	  WARN ((0, 0, _("Substituting %s for unknown date format %s"),
 		 tartime (*ts, false), quote (str)));
@@ -1060,7 +1068,7 @@ report_textual_dates (struct tar_args *args)
 	{
 	  char const *treated_as = tartime (p->ts, true);
 	  if (strcmp (p->date, treated_as) != 0)
-	    WARN ((0, 0, _("Option %s: Treating date `%s' as %s"),
+	    WARN ((0, 0, _("Option %s: Treating date '%s' as %s"),
 		   p->option, p->date, treated_as));
 	}
       free (p->date);
@@ -1150,16 +1158,18 @@ add_file_id (const char *filename)
 
 /* Default density numbers for [0-9][lmh] device specifications */
 
-#ifndef LOW_DENSITY_NUM
-# define LOW_DENSITY_NUM 0
-#endif
+#if defined DEVICE_PREFIX && !defined DENSITY_LETTER
+# ifndef LOW_DENSITY_NUM
+#  define LOW_DENSITY_NUM 0
+# endif
 
-#ifndef MID_DENSITY_NUM
-# define MID_DENSITY_NUM 8
-#endif
+# ifndef MID_DENSITY_NUM
+#  define MID_DENSITY_NUM 8
+# endif
 
-#ifndef HIGH_DENSITY_NUM
-# define HIGH_DENSITY_NUM 16
+# ifndef HIGH_DENSITY_NUM
+#  define HIGH_DENSITY_NUM 16
+# endif
 #endif
 
 static void
@@ -1370,6 +1380,59 @@ expand_pax_option (struct tar_args *targs, const char *arg)
 }
 
 
+static uintmax_t
+parse_owner_group (char *arg, uintmax_t field_max, char const **name_option)
+{
+  uintmax_t u = UINTMAX_MAX;
+  char *end;
+  char const *name = 0;
+  char const *invalid_num = 0;
+  char *colon = strchr (arg, ':');
+
+  if (colon)
+    {
+      char const *num = colon + 1;
+      *colon = '\0';
+      if (*arg)
+	name = arg;
+      if (num && (! (xstrtoumax (num, &end, 10, &u, "") == LONGINT_OK
+		     && u <= field_max)))
+	invalid_num = num;
+    }
+  else
+    {
+      uintmax_t u1;
+      switch ('0' <= *arg && *arg <= '9'
+	      ? xstrtoumax (arg, &end, 10, &u1, "")
+	      : LONGINT_INVALID)
+	{
+	default:
+	  name = arg;
+	  break;
+
+	case LONGINT_OK:
+	  if (u1 <= field_max)
+	    {
+	      u = u1;
+	      break;
+	    }
+	  /* Fall through.  */
+	case LONGINT_OVERFLOW:
+	  invalid_num = arg;
+	  break;
+	}
+    }
+
+  if (invalid_num)
+    FATAL_ERROR ((0, 0, "%s: %s", quotearg_colon (invalid_num),
+		  _("Invalid owner or group ID")));
+  if (name)
+    *name_option = name;
+  return u;
+}
+
+#define TAR_SIZE_SUFFIXES "bBcGgkKMmPTtw"
+
 static error_t
 parse_opt (int key, char *arg, struct argp_state *state)
 {
@@ -1512,10 +1575,15 @@ parse_opt (int key, char *arg, struct argp_state *state)
     case 'L':
       {
 	uintmax_t u;
-	if (xstrtoumax (arg, 0, 10, &u, "") != LONGINT_OK)
+	char *p;
+
+	if (xstrtoumax (arg, &p, 10, &u, TAR_SIZE_SUFFIXES) != LONGINT_OK)
 	  USAGE_ERROR ((0, 0, "%s: %s", quotearg_colon (arg),
 			_("Invalid tape length")));
-	tape_length_option = 1024 * (tarlong) u;
+	if (p > arg && !strchr (TAR_SIZE_SUFFIXES, p[-1]))
+	  tape_length_option = 1024 * (tarlong) u;
+	else
+	  tape_length_option = (tarlong) u;
 	multi_volume_option = true;
       }
       break;
@@ -1616,6 +1684,10 @@ parse_opt (int key, char *arg, struct argp_state *state)
 
     case 'S':
       sparse_option = true;
+      break;
+
+    case SKIP_OLD_FILES_OPTION:
+      old_files_option = SKIP_OLD_FILES;
       break;
 
     case SPARSE_VERSION_OPTION:
@@ -1768,7 +1840,7 @@ parse_opt (int key, char *arg, struct argp_state *state)
       break;
 
     case EXCLUDE_BACKUPS_OPTION:
-      add_exclude_array (backup_file_table);
+      add_exclude_array (backup_file_table, EXCLUDE_WILDCARDS);
       break;
 
     case EXCLUDE_OPTION:
@@ -1803,7 +1875,7 @@ parse_opt (int key, char *arg, struct argp_state *state)
       break;
 
     case EXCLUDE_VCS_OPTION:
-      add_exclude_array (vcs_file_table);
+      add_exclude_array (vcs_file_table, 0);
       break;
 
     case EXCLUDE_AUTO_OPTION:
@@ -1843,17 +1915,18 @@ parse_opt (int key, char *arg, struct argp_state *state)
       break;
 
     case GROUP_OPTION:
-      if (! (strlen (arg) < GNAME_FIELD_SIZE
-	     && gname_to_gid (arg, &group_option)))
-	{
-	  uintmax_t g;
-	  if (xstrtoumax (arg, 0, 10, &g, "") == LONGINT_OK
-	      && g == (gid_t) g)
-	    group_option = g;
-	  else
-	    FATAL_ERROR ((0, 0, "%s: %s", quotearg_colon (arg),
-			  _("Invalid group")));
-	}
+      {
+	uintmax_t u = parse_owner_group (arg, TYPE_MAXIMUM (gid_t),
+					 &group_name_option);
+	if (u == UINTMAX_MAX)
+	  {
+	    group_option = -1;
+	    if (group_name_option)
+	      gname_to_gid (group_name_option, &group_option);
+	  }
+	else
+	  group_option = u;
+      }
       break;
 
     case MODE_OPTION:
@@ -1920,6 +1993,10 @@ parse_opt (int key, char *arg, struct argp_state *state)
 	}
       break;
 
+    case OLD_ARCHIVE_OPTION:
+      set_archive_format ("v7");
+      break;
+      
     case OVERWRITE_DIR_OPTION:
       old_files_option = DEFAULT_OLD_FILES;
       break;
@@ -1929,17 +2006,18 @@ parse_opt (int key, char *arg, struct argp_state *state)
       break;
 
     case OWNER_OPTION:
-      if (! (strlen (arg) < UNAME_FIELD_SIZE
-	     && uname_to_uid (arg, &owner_option)))
-	{
-	  uintmax_t u;
-	  if (xstrtoumax (arg, 0, 10, &u, "") == LONGINT_OK
-	      && u == (uid_t) u)
-	    owner_option = u;
-	  else
-	    FATAL_ERROR ((0, 0, "%s: %s", quotearg_colon (arg),
-			  _("Invalid owner")));
-	}
+      {
+	uintmax_t u = parse_owner_group (arg, TYPE_MAXIMUM (uid_t),
+					 &owner_name_option);
+	if (u == UINTMAX_MAX)
+	  {
+	    owner_option = -1;
+	    if (owner_name_option)
+	      uname_to_uid (owner_name_option, &owner_option);
+	  }
+	else
+	  owner_option = u;
+      }
       break;
 
     case QUOTE_CHARS_OPTION:
@@ -1975,7 +2053,8 @@ parse_opt (int key, char *arg, struct argp_state *state)
     case RECORD_SIZE_OPTION:
       {
 	uintmax_t u;
-	if (! (xstrtoumax (arg, 0, 10, &u, "") == LONGINT_OK
+
+	if (! (xstrtoumax (arg, NULL, 10, &u, TAR_SIZE_SUFFIXES) == LONGINT_OK
 	       && u == (size_t) u))
 	  USAGE_ERROR ((0, 0, "%s: %s", quotearg_colon (arg),
 			_("Invalid record size")));
@@ -2148,7 +2227,7 @@ parse_opt (int key, char *arg, struct argp_state *state)
 	    break;
 
 	  default:
-	    argp_error (state, _("Unknown density: `%c'"), arg[0]);
+	    argp_error (state, _("Unknown density: '%c'"), arg[0]);
 	  }
 	sprintf (cursor, "%d", device);
 
@@ -2165,7 +2244,7 @@ parse_opt (int key, char *arg, struct argp_state *state)
 #else /* not DEVICE_PREFIX */
 
       argp_error (state,
-		  _("Options `-[0-7][lmh]' not supported by *this* tar"));
+		  _("Options '-[0-7][lmh]' not supported by *this* tar"));
 
 #endif /* not DEVICE_PREFIX */
 
@@ -2247,8 +2326,8 @@ decode_options (int argc, char **argv)
   tar_sparse_major = 1;
   tar_sparse_minor = 0;
 
-  owner_option = -1;
-  group_option = -1;
+  owner_option = -1; owner_name_option = NULL;
+  group_option = -1; group_name_option = NULL;
 
   check_device_option = true;
 
@@ -2296,7 +2375,7 @@ decode_options (int argc, char **argv)
 	      if (in < argv + argc)
 		*out++ = *in++;
 	      else
-		USAGE_ERROR ((0, 0, _("Old option `%c' requires an argument."),
+		USAGE_ERROR ((0, 0, _("Old option '%c' requires an argument."),
 			      *letter));
 	    }
 	}
@@ -2397,11 +2476,11 @@ decode_options (int argc, char **argv)
 	archive_name_array[0] = DEFAULT_ARCHIVE;
     }
 
-  /* Allow multiple archives only with `-M'.  */
+  /* Allow multiple archives only with '-M'.  */
 
   if (archive_names > 1 && !multi_volume_option)
     USAGE_ERROR ((0, 0,
-		  _("Multiple archive files require `-M' option")));
+		  _("Multiple archive files require '-M' option")));
 
   if (listed_incremental_option
       && NEWER_OPTION_INITIALIZED (newer_mtime_option))
@@ -2471,6 +2550,18 @@ decode_options (int argc, char **argv)
   if (recursive_unlink_option)
     old_files_option = UNLINK_FIRST_OLD_FILES;
 
+  /* Flags for accessing files to be read from or copied into.  POSIX says
+     O_NONBLOCK has unspecified effect on most types of files, but in
+     practice it never harms and sometimes helps.  */
+  {
+    int base_open_flags =
+      (O_BINARY | O_CLOEXEC | O_NOCTTY | O_NONBLOCK
+       | (dereference_option ? 0 : O_NOFOLLOW)
+       | (atime_preserve_option == system_atime_preserve ? O_NOATIME : 0));
+    open_read_flags = O_RDONLY | base_open_flags;
+    open_searchdir_flags = O_SEARCH | O_DIRECTORY | base_open_flags;
+  }
+  fstatat_flags = dereference_option ? 0 : AT_SYMLINK_NOFOLLOW;
 
   if (subcommand_option == TEST_LABEL_SUBCOMMAND)
     {
@@ -2489,7 +2580,7 @@ decode_options (int argc, char **argv)
     USAGE_ERROR ((0, 0, _("--preserve-order is not compatible with "
 			  "--listed-incremental")));
 
-  /* Forbid using -c with no input files whatsoever.  Check that `-f -',
+  /* Forbid using -c with no input files whatsoever.  Check that '-f -',
      explicit or implied, is used correctly.  */
 
   switch (subcommand_option)
@@ -2500,8 +2591,8 @@ decode_options (int argc, char **argv)
 		      _("Cowardly refusing to create an empty archive")));
       if (args.compress_autodetect && archive_names
 	  && strcmp (archive_name_array[0], "-"))
-	set_comression_program_by_suffix (archive_name_array[0],
-					  use_compress_program_option);
+	set_compression_program_by_suffix (archive_name_array[0],
+					   use_compress_program_option);
       break;
 
     case EXTRACT_SUBCOMMAND:
@@ -2523,7 +2614,7 @@ decode_options (int argc, char **argv)
 	   archive_name_cursor++)
 	if (!strcmp (*archive_name_cursor, "-"))
 	  USAGE_ERROR ((0, 0,
-			_("Options `-Aru' are incompatible with `-f -'")));
+			_("Options '-Aru' are incompatible with '-f -'")));
 
     default:
       break;
@@ -2534,7 +2625,7 @@ decode_options (int argc, char **argv)
     {
       stdlis = fopen (index_file_name, "w");
       if (! stdlis)
-	open_error (index_file_name);
+	open_fatal (index_file_name);
     }
   else
     stdlis = to_stdout_option ? stderr : stdout;
@@ -2612,7 +2703,7 @@ main (int argc, char **argv)
     {
     case UNKNOWN_SUBCOMMAND:
       USAGE_ERROR ((0, 0,
-		    _("You must specify one of the `-Acdtrux' or `--test-label'  options")));
+		    _("You must specify one of the '-Acdtrux' or '--test-label'  options")));
 
     case CAT_SUBCOMMAND:
     case UPDATE_SUBCOMMAND:
@@ -2682,9 +2773,31 @@ tar_stat_init (struct tar_stat_info *st)
   memset (st, 0, sizeof (*st));
 }
 
+/* Close the stream or file descriptor associated with ST, and remove
+   all traces of it from ST.  Return true if successful, false (with a
+   diagnostic) otherwise.  */
+bool
+tar_stat_close (struct tar_stat_info *st)
+{
+  int status = (st->dirstream ? closedir (st->dirstream)
+		: 0 < st->fd ? close (st->fd)
+		: 0);
+  st->dirstream = 0;
+  st->fd = 0;
+
+  if (status == 0)
+    return true;
+  else
+    {
+      close_diag (st->orig_file_name);
+      return false;
+    }
+}
+
 void
 tar_stat_destroy (struct tar_stat_info *st)
 {
+  tar_stat_close (st);
   free (st->orig_file_name);
   free (st->file_name);
   free (st->link_name);

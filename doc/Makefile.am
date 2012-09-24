@@ -24,9 +24,9 @@ tar_TEXINFOS = \
  fdl.texi\
  freemanuals.texi\
  genfile.texi\
- getdate.texi\
  header.texi\
  intern.texi\
+ parse-datetime.texi\
  rendition.texi\
  snapshot.texi\
  sparse.texi\
@@ -34,7 +34,7 @@ tar_TEXINFOS = \
 EXTRA_DIST = gendocs_template mastermenu.el texify.sed untabify.el
 
 # The rendering level is anyone of PUBLISH, DISTRIB or PROOF.
-# Just call `make RENDITION=PROOF [target]' if you want PROOF rendition.
+# Just call 'make RENDITION=PROOF [target]' if you want PROOF rendition.
 RENDITION = DISTRIB
 
 MAKEINFOFLAGS=-D$(RENDITION)
@@ -124,7 +124,7 @@ check-unrevised:
 
 all-check-docs: check-format check-options check-refs check-fixmes check-unrevised
 
-check-docs: 
+check-docs:
 	$(MAKE) -k all-check-docs
 
 #
@@ -144,4 +144,3 @@ manual:
 	 MAKEINFO="$(MAKEINFO) $(MAKEINFOFLAGS)" \
 	 TEXI2DVI="$(TEXI2DVI) -t @finalout" \
 	$(GENDOCS) --texi2html tar 'GNU tar manual'
-

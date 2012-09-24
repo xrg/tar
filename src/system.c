@@ -1,7 +1,7 @@
 /* System-dependent calls for tar.
 
    Copyright (C) 2003, 2004, 2005, 2006, 2007,
-   2008 Free Software Foundation, Inc.
+   2008, 2010 Free Software Foundation, Inc.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -20,6 +20,7 @@
 #include <system.h>
 
 #include "common.h"
+#include <priv-set.h>
 #include <rmt.h>
 #include <signal.h>
 
@@ -192,6 +193,7 @@ sys_spawn_shell (void)
   child = xfork ();
   if (child == 0)
     {
+      priv_set_restore_linkdir ();
       execlp (shell, "-sh", "-i", (char *) 0);
       exec_fatal (shell);
     }
@@ -283,10 +285,10 @@ xdup2 (int from, int into)
     }
 }
 
-void wait_for_grandchild (pid_t pid) __attribute__ ((__noreturn__));
+static void wait_for_grandchild (pid_t pid) __attribute__ ((__noreturn__));
 
 /* Propagate any failure of the grandchild back to the parent.  */
-void
+static void
 wait_for_grandchild (pid_t pid)
 {
   int wait_status;
@@ -362,6 +364,7 @@ sys_child_open_for_compress (void)
 	    }
 	  xdup2 (archive, STDOUT_FILENO);
 	}
+      priv_set_restore_linkdir ();
       execlp (use_compress_program_option, use_compress_program_option, NULL);
       exec_fatal (use_compress_program_option);
     }
@@ -379,6 +382,7 @@ sys_child_open_for_compress (void)
 
       xdup2 (child_pipe[PWRITE], STDOUT_FILENO);
       xclose (child_pipe[PREAD]);
+      priv_set_restore_linkdir ();
       execlp (use_compress_program_option, use_compress_program_option,
 	      (char *) 0);
       exec_fatal (use_compress_program_option);
@@ -451,6 +455,29 @@ sys_child_open_for_compress (void)
   wait_for_grandchild (grandchild_pid);
 }
 
+static void
+run_decompress_program (void)
+{
+  int i;
+  const char *p, *prog = NULL;
+
+  for (p = first_decompress_program (&i); p; p = next_decompress_program (&i))
+    {
+      if (prog)
+	{
+	  WARNOPT (WARN_DECOMPRESS_PROGRAM,
+		   (0, errno, _("cannot run %s"), prog));
+	  WARNOPT (WARN_DECOMPRESS_PROGRAM,
+		   (0, 0, _("trying %s"), p));
+	}
+      prog = p;
+      execlp (p, p, "-d", NULL);
+    }
+  if (!prog)
+    FATAL_ERROR ((0, 0, _("unable to run decompression program")));
+  exec_fatal (prog);
+}
+
 /* Set ARCHIVE for uncompressing, then reading an archive.  */
 pid_t
 sys_child_open_for_uncompress (void)
@@ -496,9 +523,8 @@ sys_child_open_for_uncompress (void)
       if (archive < 0)
 	open_fatal (archive_name_array[0]);
       xdup2 (archive, STDIN_FILENO);
-      execlp (use_compress_program_option, use_compress_program_option,
-	      "-d", (char *) 0);
-      exec_fatal (use_compress_program_option);
+      priv_set_restore_linkdir ();
+      run_decompress_program ();
     }
 
   /* We do need a grandchild tar.  */
@@ -514,9 +540,8 @@ sys_child_open_for_uncompress (void)
 
       xdup2 (child_pipe[PREAD], STDIN_FILENO);
       xclose (child_pipe[PWRITE]);
-      execlp (use_compress_program_option, use_compress_program_option,
-	      "-d", (char *) 0);
-      exec_fatal (use_compress_program_option);
+      priv_set_restore_linkdir ();
+      run_decompress_program ();
     }
 
   /* The child tar is still here!  */
@@ -702,6 +727,7 @@ sys_exec_command (char *file_name, int typechar, struct tar_stat_info *st)
   argv[2] = to_command_option;
   argv[3] = NULL;
 
+  priv_set_restore_linkdir ();
   execv ("/bin/sh", argv);
 
   exec_fatal (file_name);
@@ -816,6 +842,7 @@ sys_exec_info_script (const char **archive_name, int volume_number)
   argv[2] = (char *) info_script_option;
   argv[3] = NULL;
 
+  priv_set_restore_linkdir ();
   execv (argv[0], argv);
 
   exec_fatal (info_script_option);
@@ -863,6 +890,7 @@ sys_exec_checkpoint_script (const char *script_name,
   argv[2] = (char *) script_name;
   argv[3] = NULL;
 
+  priv_set_restore_linkdir ();
   execv (argv[0], argv);
 
   exec_fatal (script_name);

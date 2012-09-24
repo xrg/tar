@@ -80,7 +80,7 @@ process_noop (size_t size __attribute__ ((unused)),
 static int
 process_rawdata (size_t bytes, char *buffer)
 {
-  size_t status = safe_read (diff_handle, diff_buffer, bytes);
+  size_t status = blocking_read (diff_handle, diff_buffer, bytes);
 
   if (status != bytes)
     {
@@ -122,7 +122,7 @@ read_and_process (struct tar_stat_info *st, int (*processor) (size_t, char *))
   size_t data_size;
   off_t size = st->stat.st_size;
 
-  mv_begin (st);
+  mv_begin_read (st);
   while (size)
     {
       data_block = find_next_block ();
@@ -151,7 +151,7 @@ read_and_process (struct tar_stat_info *st, int (*processor) (size_t, char *))
 static int
 get_stat_data (char const *file_name, struct stat *stat_data)
 {
-  int status = deref_stat (dereference_option, file_name, stat_data);
+  int status = deref_stat (file_name, stat_data);
 
   if (status != 0)
     {
@@ -217,12 +217,7 @@ diff_file (void)
 	}
       else
 	{
-	  int atime_flag =
-	    (atime_preserve_option == system_atime_preserve
-	     ? O_NOATIME
-	     : 0);
-
-	  diff_handle = open (file_name, O_RDONLY | O_BINARY | atime_flag);
+	  diff_handle = openat (chdir_fd, file_name, open_read_flags);
 
 	  if (diff_handle < 0)
 	    {
@@ -239,12 +234,12 @@ diff_file (void)
 	      else
 		read_and_process (&current_stat_info, process_rawdata);
 
-	      if (atime_preserve_option == replace_atime_preserve)
+	      if (atime_preserve_option == replace_atime_preserve
+		  && stat_data.st_size != 0)
 		{
-		  struct timespec ts[2];
-		  ts[0] = get_stat_atime (&stat_data);
-		  ts[1] = get_stat_mtime (&stat_data);
-		  if (set_file_atime (diff_handle, file_name, ts) != 0)
+		  struct timespec atime = get_stat_atime (&stat_data);
+		  if (set_file_atime (diff_handle, chdir_fd, file_name, atime)
+		      != 0)
 		    utime_error (file_name);
 		}
 
@@ -277,7 +272,8 @@ diff_symlink (void)
   size_t len = strlen (current_stat_info.link_name);
   char *linkbuf = alloca (len + 1);
 
-  int status = readlink (current_stat_info.file_name, linkbuf, len + 1);
+  int status = readlinkat (chdir_fd, current_stat_info.file_name,
+			   linkbuf, len + 1);
 
   if (status < 0)
     {
@@ -331,7 +327,7 @@ static int
 dumpdir_cmp (const char *a, const char *b)
 {
   size_t len;
-  
+
   while (*a)
     switch (*a)
       {
@@ -345,7 +341,7 @@ dumpdir_cmp (const char *a, const char *b)
 	a += len;
 	b += len;
 	break;
-	
+
       case 'D':
 	if (strcmp(a, b))
 	  return 1;
@@ -353,7 +349,7 @@ dumpdir_cmp (const char *a, const char *b)
 	a += len;
 	b += len;
 	break;
-	
+
       case 'R':
       case 'T':
       case 'X':
@@ -363,32 +359,35 @@ dumpdir_cmp (const char *a, const char *b)
 }
 
 static void
-diff_dumpdir (void)
+diff_dumpdir (struct tar_stat_info *dir)
 {
   const char *dumpdir_buffer;
-  dev_t dev = 0;
-  struct stat stat_data;
 
-  if (deref_stat (true, current_stat_info.file_name, &stat_data))
+  if (dir->fd == 0)
     {
-      if (errno == ENOENT)
-	stat_warn (current_stat_info.file_name);
+      void (*diag) (char const *) = NULL;
+      int fd = subfile_open (dir->parent, dir->orig_file_name, open_read_flags);
+      if (fd < 0)
+	diag = open_diag;
+      else if (fstat (fd, &dir->stat))
+	diag = stat_diag;
       else
-	stat_error (current_stat_info.file_name);
+	dir->fd = fd;
+      if (diag)
+	{
+	  file_removed_diag (dir->orig_file_name, false, diag);
+	  return;
+	}
     }
-  else
-    dev = stat_data.st_dev;
-
-  dumpdir_buffer = directory_contents
-                    (scan_directory (current_stat_info.file_name, dev, false));
+  dumpdir_buffer = directory_contents (scan_directory (dir));
 
   if (dumpdir_buffer)
     {
-      if (dumpdir_cmp (current_stat_info.dumpdir, dumpdir_buffer))
-	report_difference (&current_stat_info, _("Contents differ"));
+      if (dumpdir_cmp (dir->dumpdir, dumpdir_buffer))
+	report_difference (dir, _("Contents differ"));
     }
   else
-    read_and_process (&current_stat_info, process_noop);
+    read_and_process (dir, process_noop);
 }
 
 static void
@@ -422,7 +421,8 @@ diff_multivol (void)
       return;
     }
 
-  fd = open (current_stat_info.file_name, O_RDONLY | O_BINARY);
+
+  fd = openat (chdir_fd, current_stat_info.file_name, open_read_flags);
 
   if (fd < 0)
     {
@@ -465,7 +465,7 @@ diff_archive (void)
   switch (current_header->header.typeflag)
     {
     default:
-      ERROR ((0, 0, _("%s: Unknown file type `%c', diffed as normal file"),
+      ERROR ((0, 0, _("%s: Unknown file type '%c', diffed as normal file"),
 	      quotearg_colon (current_stat_info.file_name),
 	      current_header->header.typeflag));
       /* Fall through.  */
@@ -502,7 +502,7 @@ diff_archive (void)
     case GNUTYPE_DUMPDIR:
     case DIRTYPE:
       if (is_dumpdir (&current_stat_info))
-	diff_dumpdir ();
+	diff_dumpdir (&current_stat_info);
       diff_dir ();
       break;
 
@@ -517,13 +517,24 @@ diff_archive (void)
 void
 verify_volume (void)
 {
+  int may_fail = 0;
   if (removed_prefixes_p ())
     {
       WARN((0, 0,
 	    _("Archive contains file names with leading prefixes removed.")));
-      WARN((0, 0,
-	    _("Verification may fail to locate original files.")));
+      may_fail = 1;
     }
+  if (transform_program_p ())
+    {
+      WARN((0, 0,
+	    _("Archive contains transformed file names.")));
+      may_fail = 1;
+    }
+  if (may_fail)
+    WARN((0, 0,
+	  _("Verification may fail to locate original files.")));
+
+  clear_directory_table ();
 
   if (!diff_buffer)
     diff_init ();
@@ -577,8 +588,8 @@ verify_volume (void)
   flush_read ();
   while (1)
     {
-      enum read_header status = read_header (&current_header, 
-                                             &current_stat_info, 
+      enum read_header status = read_header (&current_header,
+                                             &current_stat_info,
                                              read_header_auto);
 
       if (status == HEADER_FAILURE)
@@ -608,7 +619,7 @@ verify_volume (void)
             {
 	      char buf[UINTMAX_STRSIZE_BOUND];
 
-	      status = read_header (&current_header, &current_stat_info, 
+	      status = read_header (&current_header, &current_stat_info,
 	                            read_header_auto);
 	      if (status == HEADER_ZERO_BLOCK)
 	        break;
@@ -616,8 +627,10 @@ verify_volume (void)
 		       (0, 0, _("A lone zero block at %s"),
 			STRINGIFY_BIGINT (current_block_ordinal (), buf)));
             }
+	  continue;
 	}
-      
+
+      decode_header (current_header, &current_stat_info, &current_format, 1);
       diff_archive ();
       tar_stat_destroy (&current_stat_info);
     }

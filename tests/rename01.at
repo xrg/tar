@@ -19,7 +19,7 @@
 # 02110-1301, USA.
 
 # Description: Test basic handling of renamed directory in the incremental
-# archives. 
+# archives.
 
 AT_SETUP([renamed dirs in incrementals])
 AT_KEYWORDS([incremental rename rename01])
@@ -46,7 +46,7 @@ mv foo old
 tar xfg arch.1 /dev/null
 
 echo "Begin directory listing 1"
-find foo | sort 
+find foo | sort
 echo "End directory listing 1"
 
 tar xfg arch.2 /dev/null
@@ -81,7 +81,7 @@ End directory listing 2
 ],
 [tar: foo: Directory is new
 tar: foo/bar: Directory is new
-tar: foo/baz: Directory has been renamed from `foo/bar'
+tar: foo/baz: Directory has been renamed from 'foo/bar'
 ],
 [],[],[gnu, oldgnu, posix])
 
