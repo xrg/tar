@@ -915,7 +915,7 @@ for file in $gnulib_extra_files; do
   build-aux/*) dst=$build_aux/`expr "$file" : 'build-aux/\(.*\)'`;;
   *) dst=$file;;
   esac
-  symlink_to_dir "$GNULIB_SRCDIR" $file $dst || exit
+  symlink_to_dir "$GNULIB_SRCDIR" $file $dst
 done
 
 if test $with_gettext = yes; then
