@@ -30,3 +30,5 @@ m4
 paxutils
 rmt
 stamp-h1
+/testsuite.dir
+/testsuite.log
