@@ -38,9 +38,6 @@ with files.
 %git_get_source
 %setup -q
 
-# bzcat %{SOURCE2} > ./help2man
-# chmod +x ./help2man
-
 %build
 if [ -d %{git_repodir}/%{git_repo} ] ; then
     ./bootstrap \
