@@ -1,7 +1,7 @@
 /* A tar (tape archiver) program.
 
-   Copyright (C) 1988, 1992, 1993, 1994, 1995, 1996, 1997, 1999, 2000,
-   2001, 2003, 2004, 2005, 2006, 2007, 2009 Free Software Foundation, Inc.
+   Copyright 1988, 1992-1997, 1999-2001, 2003-2007, 2012-2013 Free
+   Software Foundation, Inc.
 
    Written by John Gilmore, starting 1985-08-25.
 
@@ -16,8 +16,7 @@
    Public License for more details.
 
    You should have received a copy of the GNU General Public License along
-   with this program; if not, write to the Free Software Foundation, Inc.,
-   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.  */
+   with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 #include <system.h>
 
@@ -67,6 +66,12 @@
 # define DEFAULT_BLOCKING 20
 #endif
 
+/* Print a message if not all links are dumped */
+static int check_links_option;
+
+/* Number of allocated tape drive names.  */
+static size_t allocated_archive_names;
+
 
 /* Miscellaneous.  */
 
@@ -74,7 +79,7 @@
 static const char *stdin_used_by;
 
 /* Doesn't return if stdin already requested.  */
-static void
+void
 request_stdin (const char *option)
 {
   if (stdin_used_by)
@@ -255,7 +260,8 @@ tar_set_quoting_style (char *arg)
 
 enum
 {
-  ANCHORED_OPTION = CHAR_MAX + 1,
+  ACLS_OPTION = CHAR_MAX + 1,
+  ANCHORED_OPTION,
   ATIME_PRESERVE_OPTION,
   BACKUP_OPTION,
   CHECK_DEVICE_OPTION,
@@ -282,6 +288,7 @@ enum
   IGNORE_COMMAND_ERROR_OPTION,
   IGNORE_FAILED_READ_OPTION,
   INDEX_FILE_OPTION,
+  KEEP_DIRECTORY_SYMLINK_OPTION,
   KEEP_NEWER_FILES_OPTION,
   LEVEL_OPTION,
   LZIP_OPTION,
@@ -290,6 +297,7 @@ enum
   MODE_OPTION,
   MTIME_OPTION,
   NEWER_MTIME_OPTION,
+  NO_ACLS_OPTION,
   NO_ANCHORED_OPTION,
   NO_AUTO_COMPRESS_OPTION,
   NO_CHECK_DEVICE_OPTION,
@@ -303,9 +311,11 @@ enum
   NO_SAME_OWNER_OPTION,
   NO_SAME_PERMISSIONS_OPTION,
   NO_SEEK_OPTION,
+  NO_SELINUX_CONTEXT_OPTION,
   NO_UNQUOTE_OPTION,
   NO_WILDCARDS_MATCH_SLASH_OPTION,
   NO_WILDCARDS_OPTION,
+  NO_XATTR_OPTION,
   NULL_OPTION,
   NUMERIC_OWNER_OPTION,
   OCCURRENCE_OPTION,
@@ -327,8 +337,10 @@ enum
   RMT_COMMAND_OPTION,
   RSH_COMMAND_OPTION,
   SAME_OWNER_OPTION,
+  SELINUX_CONTEXT_OPTION,
   SHOW_DEFAULTS_OPTION,
   SHOW_OMITTED_DIRS_OPTION,
+  SHOW_SNAPSHOT_FIELD_RANGES_OPTION,
   SHOW_TRANSFORMED_NAMES_OPTION,
   SKIP_OLD_FILES_OPTION,
   SPARSE_VERSION_OPTION,
@@ -343,7 +355,10 @@ enum
   VOLNO_FILE_OPTION,
   WARNING_OPTION,
   WILDCARDS_MATCH_SLASH_OPTION,
-  WILDCARDS_OPTION
+  WILDCARDS_OPTION,
+  XATTR_OPTION,
+  XATTR_EXCLUDE,
+  XATTR_INCLUDE
 };
 
 const char *argp_program_version = "tar (" PACKAGE_NAME ") " VERSION;
@@ -473,6 +488,9 @@ static struct argp_option options[] = {
   {"overwrite-dir", OVERWRITE_DIR_OPTION, 0, 0,
    N_("overwrite metadata of existing directories when extracting (default)"),
    GRID+1 },
+  {"keep-directory-symlink", KEEP_DIRECTORY_SYMLINK_OPTION, 0, 0,
+   N_("preserve existing symlinks to directories when extracting"),
+   GRID+1 },
 #undef GRID
 
 #define GRID 40
@@ -521,7 +539,8 @@ static struct argp_option options[] = {
   {"no-same-permissions", NO_SAME_PERMISSIONS_OPTION, 0, 0,
    N_("apply the user's umask when extracting permissions from the archive (default for ordinary users)"), GRID+1 },
   {"preserve-order", 's', 0, 0,
-   N_("sort names to extract to match archive"), GRID+1 },
+   N_("member arguments are listed in the same order as the "
+      "files in the archive"), GRID+1 },
   {"same-order", 0, 0, OPTION_ALIAS, NULL, GRID+1 },
   {"preserve", PRESERVE_OPTION, 0, 0,
    N_("same as both -p and -s"), GRID+1 },
@@ -530,6 +549,28 @@ static struct argp_option options[] = {
       " directories until the end of extraction"), GRID+1 },
   {"no-delay-directory-restore", NO_DELAY_DIRECTORY_RESTORE_OPTION, 0, 0,
    N_("cancel the effect of --delay-directory-restore option"), GRID+1 },
+#undef GRID
+
+#define GRID 55
+  {NULL, 0, NULL, 0,
+   N_("Handling of extended file attributes:"), GRID },
+
+  {"xattrs", XATTR_OPTION, 0, 0,
+   N_("Enable extended attributes support"), GRID+1 },
+  {"no-xattrs", NO_XATTR_OPTION, 0, 0,
+   N_("Disable extended attributes support"), GRID+1 },
+  {"xattrs-include", XATTR_INCLUDE, N_("MASK"), 0,
+   N_("specify the include pattern for xattr keys"), GRID+1 },
+  {"xattrs-exclude", XATTR_EXCLUDE, N_("MASK"), 0,
+   N_("specify the exclude pattern for xattr keys"), GRID+1 },
+  {"selinux", SELINUX_CONTEXT_OPTION, 0, 0,
+   N_("Enable the SELinux context support"), GRID+1 },
+  {"no-selinux", NO_SELINUX_CONTEXT_OPTION, 0, 0,
+   N_("Disable the SELinux context support"), GRID+1 },
+  {"acls", ACLS_OPTION, 0, 0,
+   N_("Enable the POSIX ACLs support"), GRID+1 },
+  {"no-acls", NO_ACLS_OPTION, 0, 0,
+   N_("Disable the POSIX ACLs support"), GRID+1 },
 #undef GRID
 
 #define GRID 60
@@ -697,7 +738,7 @@ static struct argp_option options[] = {
   {"hard-dereference", HARD_DEREFERENCE_OPTION, 0, 0,
    N_("follow hard links; archive and dump the files they refer to"), GRID+1 },
   {"starting-file", 'K', N_("MEMBER-NAME"), 0,
-   N_("begin at member MEMBER-NAME in the archive"), GRID+1 },
+   N_("begin at member MEMBER-NAME when reading the archive"), GRID+1 },
   {"newer", 'N', N_("DATE-OR-FILE"), 0,
    N_("only store files newer than DATE-OR-FILE"), GRID+1 },
   {"after-date", 0, 0, OPTION_ALIAS, NULL, GRID+1 },
@@ -776,6 +817,8 @@ static struct argp_option options[] = {
   {"confirmation", 0, 0, OPTION_ALIAS, NULL, GRID+1 },
   {"show-defaults", SHOW_DEFAULTS_OPTION, 0, 0,
    N_("show tar defaults"), GRID+1 },
+  {"show-snapshot-field-ranges", SHOW_SNAPSHOT_FIELD_RANGES_OPTION, 0, 0,
+   N_("show valid ranges for snapshot-file fields"), GRID+1 },
   {"show-omitted-dirs", SHOW_OMITTED_DIRS_OPTION, 0, 0,
    N_("when listing or extracting, list each directory that does not match search criteria"), GRID+1 },
   {"show-transformed-names", SHOW_TRANSFORMED_NAMES_OPTION, 0, 0,
@@ -938,7 +981,7 @@ set_subcommand_option (enum subcommand subcommand)
   if (subcommand_option != UNKNOWN_SUBCOMMAND
       && subcommand_option != subcommand)
     USAGE_ERROR ((0, 0,
-		  _("You may not specify more than one '-Acdtrux' or '--test-label' option")));
+		  _("You may not specify more than one '-Acdtrux', '--delete' or  '--test-label' option")));
 
   subcommand_option = subcommand;
 }
@@ -1078,83 +1121,8 @@ report_textual_dates (struct tar_args *args)
 }
 
 
-
-/* Either NL or NUL, as decided by the --null option.  */
-static char filename_terminator;
-
-enum read_file_list_state  /* Result of reading file name from the list file */
-  {
-    file_list_success,     /* OK, name read successfully */
-    file_list_end,         /* End of list file */
-    file_list_zero,        /* Zero separator encountered where it should not */
-    file_list_skip         /* Empty (zero-length) entry encountered, skip it */
-  };
-
-/* Read from FP a sequence of characters up to TERM and put them
-   into STK.
- */
-static enum read_file_list_state
-read_name_from_file (FILE *fp, struct obstack *stk, int term)
-{
-  int c;
-  size_t counter = 0;
-
-  for (c = getc (fp); c != EOF && c != term; c = getc (fp))
-    {
-      if (c == 0)
-	{
-	  /* We have read a zero separator. The file possibly is
-	     zero-separated */
-	  return file_list_zero;
-	}
-      obstack_1grow (stk, c);
-      counter++;
-    }
-
-  if (counter == 0 && c != EOF)
-    return file_list_skip;
-
-  obstack_1grow (stk, 0);
-
-  return (counter == 0 && c == EOF) ? file_list_end : file_list_success;
-}
-
-
 static bool files_from_option;  /* When set, tar will not refuse to create
 				   empty archives */
-static struct obstack argv_stk; /* Storage for additional command line options
-				   read using -T option */
-
-/* Prevent recursive inclusion of the same file */
-struct file_id_list
-{
-  struct file_id_list *next;
-  ino_t ino;
-  dev_t dev;
-};
-
-static struct file_id_list *file_id_list;
-
-static void
-add_file_id (const char *filename)
-{
-  struct file_id_list *p;
-  struct stat st;
-
-  if (stat (filename, &st))
-    stat_fatal (filename);
-  for (p = file_id_list; p; p = p->next)
-    if (p->ino == st.st_ino && p->dev == st.st_dev)
-      {
-	FATAL_ERROR ((0, 0, _("%s: file list already read"),
-		      quotearg_colon (filename)));
-      }
-  p = xmalloc (sizeof *p);
-  p->next = file_id_list;
-  p->ino = st.st_ino;
-  p->dev = st.st_dev;
-  file_id_list = p;
-}
 
 /* Default density numbers for [0-9][lmh] device specifications */
 
@@ -1171,101 +1139,6 @@ add_file_id (const char *filename)
 #  define HIGH_DENSITY_NUM 16
 # endif
 #endif
-
-static void
-update_argv (const char *filename, struct argp_state *state)
-{
-  FILE *fp;
-  size_t count = 0, i;
-  char *start, *p;
-  char **new_argv;
-  size_t new_argc;
-  bool is_stdin = false;
-  enum read_file_list_state read_state;
-  int term = filename_terminator;
-
-  if (!strcmp (filename, "-"))
-    {
-      is_stdin = true;
-      request_stdin ("-T");
-      fp = stdin;
-    }
-  else
-    {
-      add_file_id (filename);
-      if ((fp = fopen (filename, "r")) == NULL)
-	open_fatal (filename);
-    }
-
-  while ((read_state = read_name_from_file (fp, &argv_stk, term))
-	 != file_list_end)
-    {
-      switch (read_state)
-	{
-	case file_list_success:
-	  count++;
-	  break;
-
-	case file_list_end: /* won't happen, just to pacify gcc */
-	  break;
-
-	case file_list_zero:
-	  {
-	    size_t size;
-
-	    WARNOPT (WARN_FILENAME_WITH_NULS,
-		     (0, 0, N_("%s: file name read contains nul character"),
-		      quotearg_colon (filename)));
-
-	    /* Prepare new stack contents */
-	    size = obstack_object_size (&argv_stk);
-	    p = obstack_finish (&argv_stk);
-	    for (; size > 0; size--, p++)
-	      if (*p)
-		obstack_1grow (&argv_stk, *p);
-	      else
-		obstack_1grow (&argv_stk, '\n');
-	    obstack_1grow (&argv_stk, 0);
-	    count = 1;
-	    /* Read rest of files using new filename terminator */
-	    term = 0;
-	    break;
-	  }
-
-	case file_list_skip:
-	  break;
-	}
-    }
-
-  if (!is_stdin)
-    fclose (fp);
-
-  if (count == 0)
-    return;
-
-  start = obstack_finish (&argv_stk);
-
-  if (term == 0)
-    for (p = start; *p; p += strlen (p) + 1)
-      if (p[0] == '-')
-	count++;
-
-  new_argc = state->argc + count;
-  new_argv = xmalloc (sizeof (state->argv[0]) * (new_argc + 1));
-  memcpy (new_argv, state->argv, sizeof (state->argv[0]) * (state->argc + 1));
-  state->argv = new_argv;
-  memmove (&state->argv[state->next + count], &state->argv[state->next],
-	   (state->argc - state->next + 1) * sizeof (state->argv[0]));
-
-  state->argc = new_argc;
-
-  for (i = state->next, p = start; *p; p += strlen (p) + 1, i++)
-    {
-      if (term == 0 && p[0] == '-')
-	state->argv[i++] = "--add-file";
-      state->argv[i] = p;
-    }
-}
 
 
 static char *
@@ -1352,8 +1225,8 @@ expand_pax_option (struct tar_args *targs, const char *arg)
 	      tmp[len-2] = 0;
 	      if (get_date_or_file (targs, "--pax-option", tmp, &ts) == 0)
 		{
-		  char buf[UINTMAX_STRSIZE_BOUND], *s;
-		  s = umaxtostr (ts.tv_sec, buf);
+		  char buf[TIMESPEC_STRSIZE_BOUND];
+		  char const *s = code_timespec (ts, buf);
 		  obstack_grow (&stk, s, strlen (s));
 		}
 	      else
@@ -1432,6 +1305,9 @@ parse_owner_group (char *arg, uintmax_t field_max, char const **name_option)
 }
 
 #define TAR_SIZE_SUFFIXES "bBcGgkKMmPTtw"
+
+/* Either NL or NUL, as decided by the --null option.  */
+static char filename_terminator;
 
 static error_t
 parse_opt (int key, char *arg, struct argp_state *state)
@@ -1716,7 +1592,7 @@ parse_opt (int key, char *arg, struct argp_state *state)
       break;
 
     case 'T':
-      update_argv (arg, state);
+      name_add_file (arg, filename_terminator);
       /* Indicate we've been given -T option. This is for backward
 	 compatibility only, so that `tar cfT archive /dev/null will
 	 succeed */
@@ -1910,6 +1786,10 @@ parse_opt (int key, char *arg, struct argp_state *state)
       ignore_failed_read_option = true;
       break;
 
+    case KEEP_DIRECTORY_SYMLINK_OPTION:
+      keep_directory_symlink_option = true;
+      break;
+      
     case KEEP_NEWER_FILES_OPTION:
       old_files_option = KEEP_NEWER_FILES;
       break;
@@ -1996,7 +1876,7 @@ parse_opt (int key, char *arg, struct argp_state *state)
     case OLD_ARCHIVE_OPTION:
       set_archive_format ("v7");
       break;
-      
+
     case OVERWRITE_DIR_OPTION:
       old_files_option = DEFAULT_OLD_FILES;
       break;
@@ -2095,6 +1975,11 @@ parse_opt (int key, char *arg, struct argp_state *state)
 	exit (0);
       }
 
+    case SHOW_SNAPSHOT_FIELD_RANGES_OPTION:
+      show_snapshot_field_ranges ();
+      close_stdout ();
+      exit (0);
+
     case STRIP_COMPONENTS_OPTION:
       {
 	uintmax_t u;
@@ -2162,6 +2047,38 @@ parse_opt (int key, char *arg, struct argp_state *state)
 
     case NO_SAME_PERMISSIONS_OPTION:
       same_permissions_option = -1;
+      break;
+
+    case ACLS_OPTION:
+      set_archive_format ("posix");
+      acls_option = 1;
+      break;
+
+    case NO_ACLS_OPTION:
+      acls_option = -1;
+      break;
+
+    case SELINUX_CONTEXT_OPTION:
+      set_archive_format ("posix");
+      selinux_context_option = 1;
+      break;
+
+    case NO_SELINUX_CONTEXT_OPTION:
+      selinux_context_option = -1;
+      break;
+
+    case XATTR_OPTION:
+      set_archive_format ("posix");
+      xattrs_option = 1;
+      break;
+
+    case NO_XATTR_OPTION:
+      xattrs_option = -1;
+      break;
+
+    case XATTR_INCLUDE:
+    case XATTR_EXCLUDE:
+      xattrs_mask_add (arg, (key == XATTR_INCLUDE));
       break;
 
     case RECURSION_OPTION:
@@ -2293,12 +2210,37 @@ static const char *tar_authors[] = {
   "Jay Fenlason",
   NULL
 };
+
+/* Subcommand classes */
+#define SUBCL_READ    0x01   /* subcommand reads from the archive */
+#define SUBCL_WRITE   0x02   /* subcommand writes to the archive */
+#define SUBCL_UPDATE  0x04   /* subcommand updates existing archive */
+#define SUBCL_TEST    0x08   /* subcommand tests archive header or meta-info */
+#define SUBCL_OCCUR   0x10   /* subcommand allows the use of the occurrence
+				option */
+
+static int subcommand_class[] = {
+  /* UNKNOWN_SUBCOMMAND */     0,
+  /* APPEND_SUBCOMMAND  */     SUBCL_WRITE|SUBCL_UPDATE,
+  /* CAT_SUBCOMMAND     */     SUBCL_WRITE,
+  /* CREATE_SUBCOMMAND  */     SUBCL_WRITE,
+  /* DELETE_SUBCOMMAND  */     SUBCL_WRITE|SUBCL_UPDATE|SUBCL_OCCUR,
+  /* DIFF_SUBCOMMAND    */     SUBCL_READ|SUBCL_OCCUR,
+  /* EXTRACT_SUBCOMMAND */     SUBCL_READ|SUBCL_OCCUR,
+  /* LIST_SUBCOMMAND    */     SUBCL_READ|SUBCL_OCCUR,
+  /* UPDATE_SUBCOMMAND  */     SUBCL_WRITE|SUBCL_UPDATE,
+  /* TEST_LABEL_SUBCOMMAND */  SUBCL_TEST
+};
+
+/* Return t if the subcommand_option is in class(es) f */
+#define IS_SUBCOMMAND_CLASS(f) (subcommand_class[subcommand_option] & (f))
+  
+static struct tar_args args;
 
 static void
 decode_options (int argc, char **argv)
 {
   int idx;
-  struct tar_args args;
 
   argp_version_setup ("tar", tar_authors);
 
@@ -2399,7 +2341,6 @@ decode_options (int argc, char **argv)
   if (argp_parse (&argp, argc, argv, ARGP_IN_ORDER, &idx, &args))
     exit (TAREXIT_FAILURE);
 
-
   /* Special handling for 'o' option:
 
      GNU tar used to say "output old format".
@@ -2457,12 +2398,10 @@ decode_options (int argc, char **argv)
       if (!args.input_files)
 	USAGE_ERROR ((0, 0,
 		      _("--occurrence is meaningless without a file list")));
-      if (subcommand_option != DELETE_SUBCOMMAND
-	  && subcommand_option != DIFF_SUBCOMMAND
-	  && subcommand_option != EXTRACT_SUBCOMMAND
-	  && subcommand_option != LIST_SUBCOMMAND)
-	    USAGE_ERROR ((0, 0,
-			  _("--occurrence cannot be used in the requested operation mode")));
+      if (!IS_SUBCOMMAND_CLASS (SUBCL_OCCUR))
+	USAGE_ERROR ((0, 0,
+		      _("--occurrence cannot be used with %s"),
+		      subcommand_string (subcommand_option)));
     }
 
   if (archive_names == 0)
@@ -2521,15 +2460,16 @@ decode_options (int argc, char **argv)
 	USAGE_ERROR ((0, 0, _("Cannot verify multi-volume archives")));
       if (use_compress_program_option)
 	USAGE_ERROR ((0, 0, _("Cannot verify compressed archives")));
+      if (!IS_SUBCOMMAND_CLASS (SUBCL_WRITE))
+	USAGE_ERROR ((0, 0, _("--verify cannot be used with %s"),
+		      subcommand_string (subcommand_option)));
     }
 
   if (use_compress_program_option)
     {
       if (multi_volume_option)
 	USAGE_ERROR ((0, 0, _("Cannot use multi-volume compressed archives")));
-      if (subcommand_option == UPDATE_SUBCOMMAND
-	  || subcommand_option == APPEND_SUBCOMMAND
-	  || subcommand_option == DELETE_SUBCOMMAND)
+      if (IS_SUBCOMMAND_CLASS (SUBCL_UPDATE))
 	USAGE_ERROR ((0, 0, _("Cannot update compressed archives")));
       if (subcommand_option == CAT_SUBCOMMAND)
 	USAGE_ERROR ((0, 0, _("Cannot concatenate compressed archives")));
@@ -2541,11 +2481,33 @@ decode_options (int argc, char **argv)
      --gray */
   if (args.pax_option
       && archive_format != POSIX_FORMAT
-      && (subcommand_option != EXTRACT_SUBCOMMAND
-	  || subcommand_option != DIFF_SUBCOMMAND
-	  || subcommand_option != LIST_SUBCOMMAND))
+      && !IS_SUBCOMMAND_CLASS (SUBCL_READ))
     USAGE_ERROR ((0, 0, _("--pax-option can be used only on POSIX archives")));
 
+  /* star creates non-POSIX typed archives with xattr support, so allow the
+     extra headers when reading */
+  if ((acls_option > 0)
+      && archive_format != POSIX_FORMAT
+      && !IS_SUBCOMMAND_CLASS (SUBCL_READ))
+    USAGE_ERROR ((0, 0, _("--acls can be used only on POSIX archives")));
+
+  if ((selinux_context_option > 0)
+      && archive_format != POSIX_FORMAT
+      && !IS_SUBCOMMAND_CLASS (SUBCL_READ))
+    USAGE_ERROR ((0, 0, _("--selinux can be used only on POSIX archives")));
+
+  if ((xattrs_option > 0)
+      && archive_format != POSIX_FORMAT
+      && !IS_SUBCOMMAND_CLASS (SUBCL_READ))
+    USAGE_ERROR ((0, 0, _("--xattrs can be used only on POSIX archives")));
+
+  if ((starting_file_option || same_order_option)
+      && !IS_SUBCOMMAND_CLASS (SUBCL_READ))
+    USAGE_ERROR ((0, 0,
+		  _("--%s option cannot be used with %s"),
+		  starting_file_option ? "starting-file" : "same-order",
+		  subcommand_string (subcommand_option)));
+  
   /* If ready to unlink hierarchies, so we are for simpler files.  */
   if (recursive_unlink_option)
     old_files_option = UNLINK_FIRST_OLD_FILES;
@@ -2651,6 +2613,14 @@ decode_options (int argc, char **argv)
   report_textual_dates (&args);
 }
 
+void
+more_options (int argc, char **argv)
+{
+  int idx;
+  if (argp_parse (&argp, argc, argv, ARGP_IN_ORDER,
+		  &idx, &args))
+    exit (TAREXIT_FAILURE);
+}
 
 /* Tar proper.  */
 
@@ -2680,8 +2650,6 @@ main (int argc, char **argv)
     xmalloc (sizeof (const char *) * allocated_archive_names);
   archive_names = 0;
 
-  obstack_init (&argv_stk);
-
   /* System V fork+wait does not work if SIGCHLD is ignored.  */
   signal (SIGCHLD, SIG_DFL);
 
@@ -2703,7 +2671,7 @@ main (int argc, char **argv)
     {
     case UNKNOWN_SUBCOMMAND:
       USAGE_ERROR ((0, 0,
-		    _("You must specify one of the '-Acdtrux' or '--test-label'  options")));
+		    _("You must specify one of the '-Acdtrux', '--delete' or '--test-label' options")));
 
     case CAT_SUBCOMMAND:
     case UPDATE_SUBCOMMAND:
@@ -2754,6 +2722,7 @@ main (int argc, char **argv)
   /* Dispose of allocated memory, and return.  */
 
   free (archive_name_array);
+  xattrs_clear_setup ();
   name_term ();
 
   if (exit_status == TAREXIT_FAILURE)
@@ -2798,11 +2767,15 @@ void
 tar_stat_destroy (struct tar_stat_info *st)
 {
   tar_stat_close (st);
+  xheader_xattr_free (st->xattr_map, st->xattr_map_size);
   free (st->orig_file_name);
   free (st->file_name);
   free (st->link_name);
   free (st->uname);
   free (st->gname);
+  free (st->cntx_name);
+  free (st->acls_a_ptr);
+  free (st->acls_d_ptr);
   free (st->sparse_map);
   free (st->dumpdir);
   xheader_destroy (&st->xhdr);

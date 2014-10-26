@@ -1,8 +1,15 @@
-GNU tar NEWS - User visible changes. 2012-01-18
+GNU tar NEWS - User visible changes. 2013-10-05
 Please send GNU tar bug reports to <bug-tar@gnu.org>
 
 
-version 1.26.90 (Git)
+version 1.27 - Sergey Poznyakoff, 2013-10-05
+
+* Bug fixes
+
+** Sparse files with large data
+
+When creating a PAX-format archive, tar no longer arbitrarily restricts
+the size of the representation of a sparse file to be less than 8 GiB.
 
 * Quoting
 
@@ -11,9 +18,7 @@ adjusted to quote 'like this' (with apostrophes) instead of `like this'
 (with an accent grave character and an apostrophe).  This tracks
 recent changes to the GNU coding standards.
 
-* New features
-
-** --owner and --group names and numbers
+* --owner and --group names and numbers
 
 The --owner and --group options now accept operands of the form
 NAME:NUM, so that you can specify both symbolic name and numeric ID
@@ -33,6 +38,54 @@ A new option --skip-old-files is introduced, which acts exactly as
 errors.  Instead it just silently skips them.  An additional level of
 verbosity can be obtained by using the option --warning=existing-file
 together with this option.
+
+* Support for POSIX ACLs, extended attributes and SELinux context.
+
+Starting with this version tar is able to store, extract and list
+extended file attributes, POSIX.1e ACLs and SELinux context.  This is
+controlled by the command line options --xattrs, --acls and --selinux,
+correspondingly.  Each of these options has a `--no-' counterpart
+(e.g. --no-xattrs), which disables the corresponding feature.
+Additionally, the options --xattrs-include and --xattrs-exclude allow
+you to selectively control for which files to store (or extract) the
+extended attributes.
+
+* Passing command line arguments to external commands.
+
+Any option taking a command name as its argument now accepts a full
+command line as well.  Thus, it is now possible to pass additional
+arguments to invoked programs.  The affected options are:
+
+  --checkpoint-action=exec
+  -I, --use-compress-program
+  -F, --info-script
+  --to-command
+
+Furthermore, if any additional information is supplied to such a
+command via environment variables, these variables can now be used in
+the command line itself.  Care should be taken to escape them, to
+prevent from being expanded too early, for example:
+
+  tar -x -f a.tar --info-script='changevol $TAR_ARCHIVE $TAR_VOLUME'
+
+* New configure option --enable-gcc-warnings, intended for debugging.
+
+* New warning control option --warning=[no-]record-size
+
+On extraction, this option controls whether to display actual record
+size, if it differs from the default.
+
+* New command line option --keep-directory-symlink
+
+By default, if trying to extract a directory from the archive,
+tar discovers that the corresponding file name already exists and is a
+symbolic link, it first unlinks the entry, and then extracts the directory.
+
+This option disables this behavior and instructs tar to follow
+symlinks to directories when extracting from the archive.  
+
+It is mainly intended to provide compatibility with the Slackware
+installation scripts.
 
 
 version 1.26 - Sergey Poznyakoff, 2011-03-12
@@ -1372,15 +1425,14 @@ Versions 1.07 back to 1.00 by Jay Fenlason.
 
 
 
-Copyright (C) 1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2003,
-2004, 2005, 2006, 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+Copyright 1994-2001, 2003-2010, 2013 Free Software Foundation, Inc.
 
 This file is part of GNU tar.
 
 GNU tar is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
-the Free Software Foundation; either version 3, or (at your option)
-any later version.
+the Free Software Foundation; either version 3 of the License, or
+(at your option) any later version.
 
 GNU tar is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -1388,9 +1440,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
-along with tar; see the file COPYING.  If not, write to
-the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
-Boston, MA 02110-1301, USA.
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 Local variables:
 mode: outline

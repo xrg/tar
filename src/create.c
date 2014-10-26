@@ -1,23 +1,24 @@
 /* Create a tar archive.
 
-   Copyright (C) 1985, 1992, 1993, 1994, 1996, 1997, 1999, 2000, 2001,
-   2003, 2004, 2005, 2006, 2007, 2009, 2010 Free Software Foundation, Inc.
+   Copyright 1985, 1992-1994, 1996-1997, 1999-2001, 2003-2007,
+   2009-2010, 2012-2013 Free Software Foundation, Inc.
 
-   Written by John Gilmore, on 1985-08-25.
+   This file is part of GNU tar.
 
-   This program is free software; you can redistribute it and/or modify it
-   under the terms of the GNU General Public License as published by the
-   Free Software Foundation; either version 3, or (at your option) any later
-   version.
+   GNU tar is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation; either version 3 of the License, or
+   (at your option) any later version.
 
-   This program is distributed in the hope that it will be useful, but
-   WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
-   Public License for more details.
+   GNU tar is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
 
-   You should have received a copy of the GNU General Public License along
-   with this program; if not, write to the Free Software Foundation, Inc.,
-   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.  */
+   You should have received a copy of the GNU General Public License
+   along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+   Written by John Gilmore, on 1985-08-25.  */
 
 #include <system.h>
 
@@ -560,12 +561,11 @@ start_private_header (const char *name, size_t size, time_t t)
   tar_name_copy_str (header->header.name, name, NAME_FIELD_SIZE);
   OFF_TO_CHARS (size, header->header.size);
 
-  TIME_TO_CHARS (t, header->header.mtime);
+  TIME_TO_CHARS (t < 0 ? 0 : min (t, MAX_OCTAL_VAL (header->header.mtime)),
+		 header->header.mtime);
   MODE_TO_CHARS (S_IFREG|S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH, header->header.mode);
-  UID_TO_CHARS (getuid (), header->header.uid);
-  GID_TO_CHARS (getgid (), header->header.gid);
-  MAJOR_TO_CHARS (0, header->header.devmajor);
-  MINOR_TO_CHARS (0, header->header.devminor);
+  UID_TO_CHARS (0, header->header.uid);
+  GID_TO_CHARS (0, header->header.gid);
   strncpy (header->header.magic, TMAGIC, TMAGLEN);
   strncpy (header->header.version, TVERSION, TVERSLEN);
   return header;
@@ -583,11 +583,6 @@ write_short_name (struct tar_stat_info *st)
   return header;
 }
 
-#define FILL(field,byte) do {            \
-  memset(field, byte, sizeof(field)-1);  \
-  (field)[sizeof(field)-1] = 0;          \
-} while (0)
-
 /* Write a GNUTYPE_LONGLINK or GNUTYPE_LONGNAME block.  */
 static void
 write_gnu_long_link (struct tar_stat_info *st, const char *p, char type)
@@ -597,13 +592,7 @@ write_gnu_long_link (struct tar_stat_info *st, const char *p, char type)
   union block *header;
   char *tmpname;
 
-  header = start_private_header ("././@LongLink", size, time (NULL));
-  FILL (header->header.mtime, '0');
-  FILL (header->header.mode, '0');
-  FILL (header->header.uid, '0');
-  FILL (header->header.gid, '0');
-  FILL (header->header.devmajor, 0);
-  FILL (header->header.devminor, 0);
+  header = start_private_header ("././@LongLink", size, start_time.tv_sec);
   uid_to_uname (0, &tmpname);
   UNAME_TO_CHARS (tmpname, header->header.uname);
   free (tmpname);
@@ -760,7 +749,7 @@ write_extended (bool global, struct tar_stat_info *st, union block *old_header)
     {
       type = XGLTYPE;
       p = xheader_ghdr_name ();
-      time (&t);
+      t = start_time.tv_sec;
     }
   else
     {
@@ -990,6 +979,30 @@ start_header (struct tar_stat_info *st)
 	      || !string_ascii_p (st->gname)))
 	xheader_store ("gname", st, NULL);
       GNAME_TO_CHARS (st->gname, header->header.gname);
+    }
+
+  if (archive_format == POSIX_FORMAT)
+    {
+      if (acls_option > 0)
+        {
+          if (st->acls_a_ptr)
+            xheader_store ("SCHILY.acl.access", st, NULL);
+          if (st->acls_d_ptr)
+            xheader_store ("SCHILY.acl.default", st, NULL);
+        }
+      if ((selinux_context_option > 0) && st->cntx_name)
+        xheader_store ("RHT.security.selinux", st, NULL);
+      if (xattrs_option > 0)
+        {
+          size_t scan_xattr = 0;
+          struct xattr_array *xattr_map = st->xattr_map;
+
+          while (scan_xattr < st->xattr_map_size)
+            {
+              xheader_store (xattr_map[scan_xattr].xkey, st, &scan_xattr);
+              ++scan_xattr;
+            }
+        }
     }
 
   return header;
@@ -1776,6 +1789,10 @@ dump_file0 (struct tar_stat_info *st, char const *name, char const *p, struct ex
       bool ok;
       struct stat final_stat;
 
+      xattrs_acls_get (parentfd, name, st, 0, !is_dir);
+      xattrs_selinux_get (parentfd, name, st, fd);
+      xattrs_xattrs_get (parentfd, name, st, fd);
+
       if (is_dir)
 	{
 	  const char *tag_file_name;
@@ -1894,6 +1911,9 @@ dump_file0 (struct tar_stat_info *st, char const *name, char const *p, struct ex
       if (NAME_FIELD_SIZE - (archive_format == OLDGNU_FORMAT) < size)
 	write_long_link (st);
 
+      xattrs_selinux_get (parentfd, name, st, 0);
+      xattrs_xattrs_get (parentfd, name, st, 0);
+
       block_ordinal = current_block_ordinal ();
       st->stat.st_size = 0;	/* force 0 size on symlink */
       header = start_header (st);
@@ -1912,11 +1932,26 @@ dump_file0 (struct tar_stat_info *st, char const *name, char const *p, struct ex
     }
 #endif
   else if (S_ISCHR (st->stat.st_mode))
-    type = CHRTYPE;
+    {
+      type = CHRTYPE;
+      xattrs_acls_get (parentfd, name, st, 0, true);
+      xattrs_selinux_get (parentfd, name, st, 0);
+      xattrs_xattrs_get (parentfd, name, st, 0);
+    }
   else if (S_ISBLK (st->stat.st_mode))
-    type = BLKTYPE;
+    {
+      type = BLKTYPE;
+      xattrs_acls_get (parentfd, name, st, 0, true);
+      xattrs_selinux_get (parentfd, name, st, 0);
+      xattrs_xattrs_get (parentfd, name, st, 0);
+    }
   else if (S_ISFIFO (st->stat.st_mode))
-    type = FIFOTYPE;
+    {
+      type = FIFOTYPE;
+      xattrs_acls_get (parentfd, name, st, 0, true);
+      xattrs_selinux_get (parentfd, name, st, 0);
+      xattrs_xattrs_get (parentfd, name, st, 0);
+    }
   else if (S_ISSOCK (st->stat.st_mode))
     {
       WARNOPT (WARN_FILE_IGNORED,

@@ -8,6 +8,8 @@
 .deps
 .emacs*
 .libs
+/testsuite.dir
+/testsuite.log
 ABOUT-NLS
 ChangeLog
 INSTALL
@@ -23,12 +25,13 @@ config.h.in
 config.log
 config.status
 configure
-gnu
+gnu/*.h
+gnu/*/
+gnu/.gitignore
+gnu/charset.alias
 gnulib
 libtool
 m4
 paxutils
 rmt
 stamp-h1
-/testsuite.dir
-/testsuite.log
