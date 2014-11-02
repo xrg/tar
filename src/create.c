@@ -86,6 +86,13 @@ check_exclusion_tags (struct tar_stat_info const *st, char const **tag_file_name
 
   for (tag = exclusion_tags; tag; tag = tag->next)
     {
+      int tagfd = subfile_open (st, tag->name, open_read_flags);
+      if (0 <= tagfd)
+        {
+          bool satisfied = !tag->predicate || tag->predicate (tagfd);
+          close (tagfd);
+          if (satisfied)
+            {
 	  /* In the auto-exclude case, we need to process it here,
 	     because we may find more than one tag(s) */
 	  if ((tag->type == exclusion_tag_auto) ||
@@ -129,21 +136,13 @@ check_exclusion_tags (struct tar_stat_info const *st, char const **tag_file_name
 				WARN ((0, e, _("Cannot add exclude file %s"),quotearg_n (1, tag->name)));
 			}
 		}
-
 	  } else {
-      int tagfd = subfile_open (st, tag->name, open_read_flags);
-      if (0 <= tagfd)
-	{
-	  bool satisfied = !tag->predicate || tag->predicate (tagfd);
-	  close (tagfd);
-	  if (satisfied)
-	    {
 	      if (tag_file_name)
 		*tag_file_name = tag->name;
 	      return tag->type;
+	      }
 	    }
-	}
-	  } // *-*
+        }
     }
 
   return exclusion_tag_none; /* Also the value for auto-excludes */
@@ -1236,7 +1235,7 @@ dump_dir0 (struct tar_stat_info *st, char const *directory, struct exclude *excl
       struct exclude *excludes=excl, *nexcludes=excl;
 
              /*Note: check_e_t may alter the contents of excludes, nexcludes.. */
-      switch (check_exclusion_tags (st, &tag_file_name, &excludes,&nexcludes))
+      switch (check_exclusion_tags (st, &tag_file_name, &excludes, &nexcludes))
 	{
 	case exclusion_tag_all:
 	  /* Handled in dump_file0 */
