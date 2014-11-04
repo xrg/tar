@@ -620,6 +620,7 @@ procdir (const char *name_buffer, struct tar_stat_info *st,
 	  break;
 
 	case exclusion_tag_none:
+        default:
 	  break;
 	}
     }
