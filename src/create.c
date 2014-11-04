@@ -76,6 +76,12 @@ exclusion_tag_warning (const char *dirname, const char *tagname,
 	      message));
 }
 
+static void
+add_exclude2 (struct exclude *ex, char const *pattern, int options, void *data)
+{
+  add_exclude(ex, pattern, options);
+}
+
 enum exclusion_tag_type
 check_exclusion_tags (struct tar_stat_info const *st, char const **tag_file_name,
                       struct exclude** excl, struct exclude** nexcl)
@@ -87,61 +93,78 @@ check_exclusion_tags (struct tar_stat_info const *st, char const **tag_file_name
   for (tag = exclusion_tags; tag; tag = tag->next)
     {
       int tagfd = subfile_open (st, tag->name, open_read_flags);
-      if (0 <= tagfd)
-        {
-          bool satisfied = !tag->predicate || tag->predicate (tagfd);
-          close (tagfd);
-          if (satisfied)
-            {
-	  /* In the auto-exclude case, we need to process it here,
-	     because we may find more than one tag(s) */
-	  if ((tag->type == exclusion_tag_auto) ||
-	  	(tag->type == exclusion_tag_autorec))
-	  {
-	  	if (! pexcl)
-	  		continue; /* Will not modify lists, carry on looking */
-	  
-	  	if (tag->type == exclusion_tag_autorec && (nexcl) && (*nexcl == pexcl))
-	  		*nexcl = NULL;
-	  	if (*excl == pexcl){
-	  		/* First tag encountered, copy parent's excludes */
-	  		*excl = new_exclude();
-			copy_exclude(*excl,pexcl);
-			if (nexcl && (! *nexcl))
-				*nexcl = *excl;  /* Use the same for nexcl, excl */
-		}
+      if (tagfd < 0)
+        continue;
 
-	  	if (add_exclude_file (add_exclude, *excl, tag->name,
-			EXCLUDE_WILDCARDS , '\n') != 0)
-		{
-			int e = errno;
-			WARN ((0, e, _("Cannot add exclude file %s"),quotearg_n (1, tag->name)));
-			continue;
-		}else if (verbose_option){
-			WARN((0, 0, _("Auto exclude file found: %s"),quotearg_n (1, tag->name)));
-		}
-		
-		if (tag->type == exclusion_tag_autorec && (nexcl) && (*nexcl != *excl))
-		{
-			if (*nexcl == NULL) {
-				*nexcl = new_exclude();
-				copy_exclude(*nexcl,pexcl);
-			}
-			/* Sadly, we need to re-scan the exclude file here because it will
-			   be appended to a different list */
-			if (add_exclude_file (add_exclude, *nexcl, tag->name,
-				EXCLUDE_WILDCARDS , '\n') != 0)
-			{
-				int e = errno;
-				WARN ((0, e, _("Cannot add exclude file %s"),quotearg_n (1, tag->name)));
-			}
-		}
-	  } else {
-	      if (tag_file_name)
-		*tag_file_name = tag->name;
-	      return tag->type;
-	      }
-	    }
+      bool satisfied = !tag->predicate || tag->predicate (tagfd);
+      if (!satisfied)
+        {
+          close (tagfd);
+          continue;
+        }
+
+        /* In the auto-exclude case, we need to process it here,
+           because we may find more than one tag(s).
+           At this point, tagfd is still open and we assume at 0L position
+        */
+        if ((tag->type == exclusion_tag_auto) ||
+                (tag->type == exclusion_tag_autorec))
+        {
+            if (! pexcl)
+            {
+                close(tagfd);
+                continue; /* Will not modify lists, carry on looking */
+            }
+
+            FILE *tagfp = fdopen(tagfd, "rb");
+
+            if (tag->type == exclusion_tag_autorec && (nexcl) && (*nexcl == pexcl))
+                *nexcl = NULL;
+            if (*excl == pexcl)
+            {
+                /* First tag encountered, copy parent's excludes */
+                *excl = new_exclude();
+                copy_exclude(*excl,pexcl);
+                if (nexcl && (! *nexcl))
+                        *nexcl = *excl;  /* Use the same for nexcl, excl */
+            }
+
+            if (add_exclude_fp(add_exclude2, *excl, tagfp,
+                    EXCLUDE_WILDCARDS , '\n', NULL) != 0)
+              {
+                int e = errno;
+                WARN ((0, e, _("Cannot add exclude file %s"),quotearg_n (1, tag->name)));
+                fclose(tagfp);
+                continue;
+              }
+            else if (verbose_option)
+                WARN((0, 0, _("Auto exclude file found: %s"),quotearg_n (1, tag->name)));
+
+            if (tag->type == exclusion_tag_autorec && (nexcl) && (*nexcl != *excl))
+            {
+                if (*nexcl == NULL)
+                {
+                   *nexcl = new_exclude();
+                   copy_exclude(*nexcl,pexcl);
+                }
+                /* Sadly, we need to re-scan the exclude file here because it will
+                        be appended to a different list */
+                rewind(tagfp);
+                if (add_exclude_fp (add_exclude2, *nexcl, tagfp,
+                        EXCLUDE_WILDCARDS , '\n', NULL) != 0)
+                {
+                    int e = errno;
+                    WARN ((0, e, _("Cannot add exclude file %s"),quotearg_n (1, tag->name)));
+                }
+            }
+            fclose(tagfp);
+        }
+        else
+        {
+            if (tag_file_name)
+                *tag_file_name = tag->name;
+            close(tagfd);
+            return tag->type;
         }
     }
 
